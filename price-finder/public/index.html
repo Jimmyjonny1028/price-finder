@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Price Finder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Smart Price Finder</h1>
+        <p class="subtitle">Your personal PC-powered web scraper.</p>
+        <form id="search-form">
+            <input type="text" id="search-input" placeholder="e.g., Google Pixel 9" required>
+            <button type="submit" id="search-button">Search</button>
+        </form>
+        <div class="controls-container" id="controls-container" style="display: none;">
+            <div class="control-group"> <label for="sort-select">Sort by:</label> <select id="sort-select"> <option value="price-asc">Price: Low to High</option> <option value="price-desc">Price: High to Low</option> </select> </div>
+            <div class="control-group"> <label for="condition-filter-select">Condition:</label> <select id="condition-filter-select"> <option value="all">All Conditions</option> <option value="new">New Only</option> <option value="refurbished">Refurbished Only</option> </select> </div>
+            <div class="control-group"> <label for="store-filter-select">Store:</label> <select id="store-filter-select"> <option value="all">All Stores</option> </select> </div>
+        </div>
+        <div id="loader" class="hidden"> <div class="spinner"></div> <p>Sending job to your PC...</p> </div>
+        <div id="results-container"></div>
+        <p class="disclaimer" style="text-align: center; color: #718096; font-size: 12px; margin-top: 20px;"> All prices are estimated in AUD. Results may include affiliate links. </p>
+    </div>
+    <button id="admin-button" title="Admin Panel">A</button>
+    <div id="admin-panel" class="modal-overlay">
+        <div class="modal-content">
+            <button id="close-admin-panel" class="close-button">×</button>
+            <h2>Admin Panel</h2>
+            <div class="maintenance-controls">
+                <h4>Maintenance Mode</h4>
+                <p>Current Status: <strong id="maintenance-status">UNKNOWN</strong></p>
+                <button id="toggle-maintenance-button">Toggle Service</button>
+                <p class="small-text">Disables the search function for all users.</p>
+            </div>
+            <hr>
+            <h3>Traffic Stats</h3>
+            <p><strong>Total Searches:</strong> <span id="total-searches">0</span></p>
+            <p><strong>Unique Visitors:</strong> <span id="unique-visitors">0</span></p>
+            <h3>Recent Searches:</h3>
+            <ul id="search-history-list"></ul>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
