@@ -1,158 +1,123 @@
-// public/script.js (FINAL)
+// server.js (Reverted to FINAL, Stable Version)
 
-// --- Element Selection ---
-const searchForm = document.getElementById('search-form');
-const searchInput = document.getElementById('search-input');
-const searchButton = document.getElementById('search-button');
-const resultsContainer = document.getElementById('results-container');
-const loader = document.getElementById('loader');
-const loaderText = document.querySelector('#loader p');
-const controlsContainer = document.getElementById('controls-container');
-const sortSelect = document.getElementById('sort-select');
-const conditionFilterSelect = document.getElementById('condition-filter-select');
-const storeFilterButton = document.getElementById('store-filter-button');
-const storeFilterPanel = document.getElementById('store-filter-panel');
-const storeFilterList = document.getElementById('store-filter-list');
-const storeSelectAllButton = document.getElementById('store-select-all-button');
-const storeUnselectAllButton = document.getElementById('store-unselect-all-button');
-const themeNotificationEl = document.getElementById('theme-notification');
+const express = require('express');
+const cors = require('cors');
+require('dotenv').config();
+const http = require('http');
+const { WebSocketServer } = require('ws');
+const url = require('url');
+const axios = require('axios');
+const fs = require('fs').promises;
+const path = require('path');
 
-// --- Global State ---
-let fullResults = [];
-let availableStores = [];
-let selectedStores = new Set();
-let loadingInterval;
-const loadingMessages = [ "Contacting local scraper...", "Searching Google Shopping & eBay...", "Checking Amazon & other major retailers...", "Analyzing search results...", "Compiling all the deals...", "This may take a minute...", "Almost finished..." ];
-let currentLocalTheme = 'default';
-let lastSeenRainEvent = 0;
-let notificationTimeout;
+const app = express();
+const PORT = 5000;
+const server = http.createServer(app);
 
-// --- Main Event Listeners ---
-searchForm.addEventListener('submit', handleSearch);
-sortSelect.addEventListener('change', applyFiltersAndSort);
-conditionFilterSelect.addEventListener('change', applyFiltersAndSort);
-storeFilterButton.addEventListener('click', () => { storeFilterPanel.classList.toggle('hidden'); });
-storeSelectAllButton.addEventListener('click', () => { updateAllCheckboxes(true); });
-storeUnselectAllButton.addEventListener('click', () => { updateAllCheckboxes(false); });
-storeFilterList.addEventListener('change', (event) => { if (event.target.type === 'checkbox') { const store = event.target.dataset.store; if (event.target.checked) { selectedStores.add(store); } else { selectedStores.delete(store); } updateStoreFilterButtonText(); applyFiltersAndSort(); } });
-document.addEventListener('click', (event) => { if (!storeFilterButton.contains(event.target) && !storeFilterPanel.contains(event.target)) { storeFilterPanel.classList.add('hidden'); } });
+let limit;
 
-// --- Core Application Logic ---
-async function handleSearch(event) { event.preventDefault(); const searchTerm = searchInput.value.trim(); if (!searchTerm) { resultsContainer.innerHTML = '<p>Please enter a product to search for.</p>'; return; } searchButton.disabled = true; controlsContainer.style.display = 'none'; resultsContainer.innerHTML = ''; let messageIndex = 0; loaderText.textContent = loadingMessages[messageIndex]; loader.classList.remove('hidden'); loader.classList.remove('polling'); loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000); try { const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`); if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error || `Server returned an error: ${response.statusText}`); } if (response.status === 202) { loader.classList.add('polling'); pollForResults(searchTerm); return; } const results = await response.json(); if (results.length > 0) { fullResults = results; populateAndShowControls(); applyFiltersAndSort(); } else { resultsContainer.innerHTML = `<p>No cached results found.</p>`; } } catch (error) { console.error("Failed to fetch data:", error); resultsContainer.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`; } finally { if (!loader.classList.contains('polling')) { searchButton.disabled = false; loader.classList.add('hidden'); clearInterval(loadingInterval); } } }
-function pollForResults(query, attempt = 1) { const maxAttempts = 60; const interval = 5000; if (attempt > maxAttempts) { loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">The search took too long. Please check your local scraper and backup API, then try again.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); return; } fetch(`/results/${encodeURIComponent(query)}`).then(res => { if (res.status === 200) return res.json(); if (res.status === 202) { setTimeout(() => pollForResults(query, attempt + 1), interval); return null; } throw new Error('Server returned an error during polling.'); }).then(results => { if (results) { console.log("Polling successful. Found results."); loader.classList.remove('polling'); loader.classList.add('hidden'); searchButton.disabled = false; clearInterval(loadingInterval); fullResults = results; if (fullResults.length === 0) { resultsContainer.innerHTML = `<p>The scraper and backup API found no matching results for "${query}".</p>`; } else { populateAndShowControls(); applyFiltersAndSort(); } } }).catch(error => { console.error("Polling failed:", error); loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">An error occurred while checking for results.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); }); }
-function applyFiltersAndSort() { const sortBy = sortSelect.value; const conditionFilter = conditionFilterSelect.value; let processedResults = [...fullResults]; if (conditionFilter === 'new') { processedResults = processedResults.filter(item => item.condition === 'New'); } else if (conditionFilter === 'refurbished') { processedResults = processedResults.filter(item => item.condition === 'Refurbished'); } if (selectedStores.size > 0 && selectedStores.size < availableStores.length) { processedResults = processedResults.filter(item => selectedStores.has(item.store)); } if (sortBy === 'price-asc') { processedResults.sort((a, b) => a.price - b.price); } else if (sortBy === 'price-desc') { processedResults.sort((a, b) => b.price - a.price); } renderResults(processedResults); }
-function populateAndShowControls() { sortSelect.value = 'price-asc'; conditionFilterSelect.value = 'all'; availableStores = [...new Set(fullResults.map(item => item.store))].sort(); storeFilterList.innerHTML = ''; selectedStores.clear(); availableStores.forEach(store => { const li = document.createElement('li'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.id = `store-${store}`; checkbox.dataset.store = store; checkbox.checked = true; const label = document.createElement('label'); label.htmlFor = `store-${store}`; label.textContent = store; li.appendChild(checkbox); li.appendChild(label); storeFilterList.appendChild(li); selectedStores.add(store); }); updateStoreFilterButtonText(); controlsContainer.style.display = 'flex'; }
-function updateStoreFilterButtonText() { if (selectedStores.size === availableStores.length) { storeFilterButton.textContent = 'All Stores'; } else if (selectedStores.size === 0) { storeFilterButton.textContent = 'No Stores Selected'; } else if (selectedStores.size === 1) { storeFilterButton.textContent = `${selectedStores.values().next().value}`; } else { storeFilterButton.textContent = `${selectedStores.size} Stores Selected`; } }
-function updateAllCheckboxes(checked) { document.querySelectorAll('#store-filter-list input[type="checkbox"]').forEach(cb => { cb.checked = checked; if (checked) { selectedStores.add(cb.dataset.store); } else { selectedStores.clear(); } }); updateStoreFilterButtonText(); applyFiltersAndSort(); }
-function renderResults(results) { resultsContainer.innerHTML = `<h2>Best Prices for ${searchInput.value.trim()}</h2>`; if (results.length === 0) { resultsContainer.innerHTML += `<p>No results match the current filters.</p>`; return; } results.forEach(offer => { const card = document.createElement('div'); card.className = 'result-card'; const isLinkValid = offer.url && offer.url !== '#'; const linkAttributes = isLinkValid ? `href="${offer.url}" target="_blank" rel="noopener noreferrer"` : `href="#" class="disabled-link"`; const conditionBadge = offer.condition === 'Refurbished' ? `<span class="condition-badge">Refurbished</span>` : ''; card.innerHTML = ` <div class="result-image"> <img src="${offer.image}" alt="${offer.title}" onerror="this.style.display='none';"> </div> <div class="result-info"> <h3>${offer.title}</h3> <p>Sold by: <strong>${offer.store}</strong> ${conditionBadge}</p> </div> <div class="result-price"> <a ${linkAttributes}> ${offer.price_string} </a> </div> `; resultsContainer.appendChild(card); }); }
+// Caches and State
+const searchCache = new Map();
+let imageCache = new Map();
+const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
+const searchTermFrequency = new Map();
+const CACHE_DURATION_MS = 60 * 60 * 1000;
+const MAX_HISTORY = 50;
+const onlineUserTimeouts = new Map();
+const USER_ONLINE_TIMEOUT_MS = 65 * 1000;
+let isQueueProcessingPaused = false;
+let isMaintenanceModeEnabled = false;
 
-// --- "Fun" and Real-time Features ---
-function makeItRain() { const rainContainer = document.body; for (let i = 0; i < 40; i++) { const money = document.createElement('span'); money.textContent = '💰'; money.style.position = 'fixed'; money.style.top = `${Math.random() * -20}vh`; money.style.left = `${Math.random() * 100}vw`; money.style.fontSize = `${Math.random() * 2 + 1}rem`; money.style.zIndex = '9999'; money.style.transition = 'top 2s ease-in, transform 2s ease-in-out'; money.style.pointerEvents = 'none'; rainContainer.appendChild(money); setTimeout(() => { money.style.top = '110vh'; money.style.transform = `rotate(${Math.random() * 720}deg)`; }, 10); setTimeout(() => { money.remove(); }, 2100); } }
+let liveState = {
+    theme: 'default',
+    rainEventTimestamp: 0,
+    onlineUsers: 0
+};
+const IMAGE_CACHE_PATH = path.join(__dirname, 'image_cache.json');
+const LIVE_STATE_PATH = path.join(__dirname, 'public', 'live_state.json');
 
-async function pollForLiveState() {
-    try {
-        const response = await fetch(`/live_state.json?t=${Date.now()}`);
-        if (!response.ok) return;
-        const data = await response.json();
-        if (data.theme && data.theme !== currentLocalTheme) {
-            applyTheme(data.theme, true);
-        }
-        if (data.rainEventTimestamp && data.rainEventTimestamp > lastSeenRainEvent) {
-            makeItRain();
-            lastSeenRainEvent = data.rainEventTimestamp;
-        }
-    } catch (error) {
-        console.error("Live state poll failed:", error);
-    }
+async function updateLiveStateFile() { liveState.onlineUsers = onlineUserTimeouts.size; try { await fs.writeFile(LIVE_STATE_PATH, JSON.stringify(liveState, null, 2), 'utf8'); } catch (error) { console.error('Error writing live state file:', error); } }
+async function loadImageCacheFromFile() { try { await fs.access(IMAGE_CACHE_PATH); const data = await fs.readFile(IMAGE_CACHE_PATH, 'utf8'); const plainObject = JSON.parse(data); imageCache = new Map(Object.entries(plainObject)); console.log(`✅ Permanent image cache loaded successfully from ${IMAGE_CACHE_PATH}`); } catch (error) { if (error.code === 'ENOENT') { console.log('Image cache file not found. A new one will be created when needed.'); } else { console.error('Error loading image cache from file:', error); } imageCache = new Map(); } }
+async function saveImageCacheToFile() { try { const plainObject = Object.fromEntries(imageCache); const jsonString = JSON.stringify(plainObject, null, 2); await fs.writeFile(IMAGE_CACHE_PATH, jsonString, 'utf8'); } catch (error) { console.error('Error saving image cache to file:', error); } }
+
+app.use(express.json({ limit: '10mb' }));
+app.use(cors());
+app.use(express.static('public'));
+
+const ADMIN_CODE = process.env.ADMIN_CODE;
+const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
+const PRICEAPI_COM_KEY = process.env.PRICEAPI_COM_KEY;
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID;
+
+const jobQueue = [];
+let workerSocket = null;
+let workerActiveJobs = new Set();
+const wss = new WebSocketServer({ server });
+function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueue.length === 0) return; const nextQuery = jobQueue.shift(); workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery })); }
+wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
+
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement', 'screen', 'magsafe', 'camera' ];
+const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
+const COMPONENT_KEYWORDS = ['ssd', 'hdd', 'ram', 'memory', 'cooler', 'fan', 'power supply', 'psu', 'motherboard', 'cpu', 'processor', 'gpu', 'graphics card'];
+const MAIN_PRODUCT_PRICE_THRESHOLD = 200;
+const COLOR_LIST = ['black', 'white', 'silver', 'gold', 'gray', 'blue', 'red', 'green', 'pink', 'purple', 'yellow', 'orange', 'bronze', 'graphite', 'sierra', 'alpine', 'starlight', 'midnight'];
+const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); return REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword)) ? 'Refurbished' : 'New'; };
+const filterForIrrelevantAccessories = (results) => { return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword))); };
+const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'compatible with', 'fits ']; return results.filter(item => !negativePhrases.some(phrase => item.title.toLowerCase().includes(phrase))); };
+const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); const allKeywords = [...ACCESSORY_KEYWORDS, ...COMPONENT_KEYWORDS]; return allKeywords.some(keyword => queryLower.includes(keyword)); };
+const extractColorFromTitle = (title) => { const titleLower = title.toLowerCase(); for (const color of COLOR_LIST) { if (titleLower.includes(color)) return color; } return null; };
+
+// ### FIXED: This is the simple, non-destructive parser that solves the filtering bug ###
+function parsePythonResults(results) {
+    return results.map(item => {
+        const fullText = item.title;
+        const priceMatch = fullText.match(/\$\s?[\d,]+(\.\d{2})?/);
+        const priceString = priceMatch ? priceMatch[0] : null;
+        const price = priceString ? parseFloat(priceString.replace(/[^0-9.]/g, '')) : null;
+        if (!price) return null;
+        const store = fullText.split(' ')[0];
+        return {
+            title: fullText, // The CRITICAL change: Pass the original, unmodified title to all filters
+            price: price,
+            price_string: priceString,
+            store: store,
+            url: item.url || '#'
+        };
+    }).filter(Boolean);
 }
 
-function applyTheme(themeName, showNotification = false) {
-    document.body.classList.remove('theme-default', 'theme-dark', 'theme-retro', 'theme-sepia', 'theme-solarized', 'theme-synthwave');
-    document.body.classList.add(`theme-${themeName}`);
-    currentLocalTheme = themeName;
+const filterResultsByQuery = (results, query) => { const queryLower = query.toLowerCase(); const queryWords = queryLower.split(' ').filter(w => w.length > 1 && isNaN(w)); const queryNumbers = queryLower.split(' ').filter(w => !isNaN(w) && w.length > 0); if (queryWords.length === 0 && queryNumbers.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); const hasAllWords = queryWords.every(word => itemTitle.includes(word)); const hasAllNumbers = queryNumbers.every(num => itemTitle.includes(num)); return hasAllWords && hasAllNumbers; }); };
+function parsePriceApiResults(downloadedJobs) { let allResults = []; for (const jobData of downloadedJobs) { if (!jobData || !jobData.results || jobData.results.length === 0) continue; const sourceName = jobData.source || 'API Source'; const topic = jobData.topic; const jobResult = jobData.results[0]; let mapped = []; if (topic === 'product_and_offers' && jobResult.content) { const content = jobResult.content; const offer = content.buybox; if (content.name && offer && offer.min_price) { mapped.push({ title: content.name, price: parseFloat(offer.min_price), price_string: offer.min_price ? `$${parseFloat(offer.min_price).toFixed(2)}` : 'N/A', url: content.url, image: content.image_url, store: offer.shop_name || sourceName }); } } else if (topic === 'search_results' && jobResult.content?.search_results) { const searchResults = jobResult.content.search_results; mapped = searchResults.map(item => { let price = null; let price_string = 'N/A'; if (item.price) { price = parseFloat(item.price); price_string = item.price_string || `$${parseFloat(item.price).toFixed(2)}`; } else if (item.min_price) { price = parseFloat(item.min_price); price_string = `From $${price.toFixed(2)}`; } if (item.name && price !== null) { return { title: item.name, price: price, price_string: price_string, url: item.url, image: item.img_url, store: item.shop_name || sourceName }; } return null; }).filter(Boolean); } allResults = allResults.concat(mapped); } return allResults; }
+function filterByMeanPrice(results, thresholdFactor = 0.5) { if (results.length < 5) { return results; } const prices = results.map(item => item.price).filter(price => price > 0); if (prices.length < 3) { return results; } const sum = prices.reduce((a, b) => a + b, 0); const mean = sum / prices.length; const priceThreshold = mean * thresholdFactor; console.log(`[Dynamic Filter] Mean price: $${mean.toFixed(2)}, Filtering items below: $${priceThreshold.toFixed(2)}`); return results.filter(item => item.price >= priceThreshold); }
+async function searchPriceApiCom(query) { try { const negative_keywords = ['case', 'protector', 'strap', 'charger', 'band', 'replacement', 'film', 'glass', 'cover']; const jobsToSubmit = [ { source: 'amazon', country: 'au', topic: 'product_and_offers', key: 'term', values: query }, { source: 'ebay', country: 'au', topic: 'search_results', key: 'term', values: query, condition: 'any' }, { source: 'google_shopping', country: 'au', topic: 'search_results', key: 'term', values: query, condition: 'any', negative_keywords: negative_keywords.join(',') } ]; const jobPromises = jobsToSubmit.map(job => axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, ...job }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message); return null; }) ); const jobResponses = (await Promise.all(jobPromises)).filter(Boolean); if (jobResponses.length === 0) return []; console.log(`[Backup API] Created ${jobResponses.length} jobs for "${query}". Waiting 15s...`); await wait(15000); const resultPromises = jobResponses.map(job => axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to fetch results for job ID ${job.job_id}`, err.response?.data?.message || err.message); return null; }) ); return (await Promise.all(resultPromises)).filter(Boolean); } catch (err) { console.error("A critical error occurred in the searchPriceApiCom function:", err.message); return []; } }
+async function fetchImageForQuery(query) { const cacheKey = query.toLowerCase(); if (imageCache.has(cacheKey)) { return imageCache.get(cacheKey); } const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A'; if (!GOOGLE_API_KEY || !GOOGLE_CSE_ID) { return placeholder; } try { const response = await limit(() => { const url = `https://www.googleapis.com/customsearch/v1`; const params = { key: GOOGLE_API_KEY, cx: GOOGLE_CSE_ID, q: query, searchType: 'image', num: 1 }; return axios.get(url, { params }); }); const imageUrl = response.data.items?.[0]?.link || placeholder; imageCache.set(cacheKey, imageUrl); await saveImageCacheToFile(); return imageUrl; } catch (error) { console.error(`[FATAL] Google Image Search request failed for query: "${query}"`); if (error.response) { console.error('Error Data:', JSON.stringify(error.response.data, null, 2)); } else { console.error('Error Message:', error.message); } return placeholder; } }
+async function enrichResultsWithImages(results, baseQuery) { if (results.length === 0) return results; const defaultImageUrl = await fetchImageForQuery(baseQuery); const uniqueColors = new Set(results.map(result => extractColorFromTitle(result.title)).filter(Boolean)); const colorsToFetch = Array.from(uniqueColors).slice(0, 2); const colorImageMap = new Map(); if (colorsToFetch.length > 0) { console.log(`Enriching with up to 2 extra color-specific images for: ${colorsToFetch.join(', ')}`); } await Promise.all(colorsToFetch.map(async (color) => { const specificQuery = `${baseQuery} ${color}`; const imageUrl = await fetchImageForQuery(specificQuery); colorImageMap.set(color, imageUrl); })); results.forEach(result => { const color = extractColorFromTitle(result.title); result.image = colorImageMap.get(color) || defaultImageUrl; }); return results; }
+
+app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } const normalizedQuery = query.toLowerCase().trim(); if (normalizedQuery) { const currentCount = searchTermFrequency.get(normalizedQuery) || 0; searchTermFrequency.set(normalizedQuery, currentCount + 1); } } catch (e) { console.error("Error logging traffic:", e); } const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData.results); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
+app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey).results); } else { return res.status(202).send(); }});
+app.post('/submit-results', async (req, res) => { const { secret, query, results } = req.body; if (secret !== SERVER_SIDE_SECRET) { return res.status(403).send('Forbidden'); } if (!query || !results) { return res.status(400).send('Bad Request: Missing query or results.'); } res.status(200).send('Results received. Processing now.'); let allScraperResults = parsePythonResults(results); const isComponentOrAccessory = detectSearchIntent(query); let finalFilteredScraperResults = []; let triggerFallback = false; if (allScraperResults.length > 0) { if (isComponentOrAccessory) { finalFilteredScraperResults = filterResultsByQuery(allScraperResults, query); } else { const maxPrice = Math.max(...allScraperResults.map(item => item.price)); if (maxPrice < MAIN_PRODUCT_PRICE_THRESHOLD) { console.log(`[Fallback Trigger] Main product search for "${query}" only found cheap items (max price: $${maxPrice.toFixed(2)}). Discarding scraper results.`); triggerFallback = true; } else { const priceFiltered = filterByMeanPrice(allScraperResults); const accessoryFiltered = filterForIrrelevantAccessories(priceFiltered); const mainDeviceFiltered = filterForMainDevice(accessoryFiltered); finalFilteredScraperResults = filterResultsByQuery(mainDeviceFiltered, query); } } } if (finalFilteredScraperResults.length === 0 && !triggerFallback) { triggerFallback = true; } if (triggerFallback) { console.log(`[Fallback] Running backup API for "${query}".`); try { const downloadedJobs = await searchPriceApiCom(query); let allApiResults = parsePriceApiResults(downloadedJobs); let finalApiResults = isComponentOrAccessory ? allApiResults : filterByMeanPrice(allApiResults); finalApiResults = filterResultsByQuery(finalApiResults, query); const resultsWithImages = await enrichResultsWithImages(finalApiResults, query); const sortedResults = resultsWithImages.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) })); searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() }); } catch (error) { console.error(`[Backup API] A critical error occurred during the fallback for "${query}":`, error); searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() }); } } else { const resultsWithImages = await enrichResultsWithImages(finalFilteredScraperResults, query); const sortedResults = resultsWithImages.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) })); searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() }); } });
+
+app.post('/api/ping', (req, res) => { const { sessionID } = req.body; if (!sessionID) return res.status(400).send(); if (onlineUserTimeouts.has(sessionID)) { clearTimeout(onlineUserTimeouts.get(sessionID)); } const timeoutID = setTimeout(() => { onlineUserTimeouts.delete(sessionID); updateLiveStateFile(); }, USER_ONLINE_TIMEOUT_MS); onlineUserTimeouts.set(sessionID, timeoutID); updateLiveStateFile(); res.status(200).json({ status: 'ok' }); });
+app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const topSearches = [...searchTermFrequency.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([term, count]) => ({ term, count })); res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory, isServiceDisabled: isMaintenanceModeEnabled, workerStatus: workerSocket ? 'Connected' : 'Disconnected', activeJobs: Array.from(workerActiveJobs), jobQueue: jobQueue, isQueuePaused: isQueueProcessingPaused, imageCacheSize: imageCache.size, currentTheme: liveState.theme, onlineUsers: liveState.onlineUsers, topSearches: topSearches }); });
+app.post('/admin/toggle-maintenance', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } isMaintenanceModeEnabled = !isMaintenanceModeEnabled; const message = `Service has been ${isMaintenanceModeEnabled ? 'DISABLED' : 'ENABLED'}.`; console.log(`MAINTENANCE MODE: ${message}`); res.json({ isServiceDisabled: isMaintenanceModeEnabled, message: message }); });
+app.post('/admin/clear-cache', (req, res) => { const { code, query } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } if (query) { const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { searchCache.delete(cacheKey); console.log(`ADMIN ACTION: Cleared cache for "${query}".`); res.status(200).json({ message: `Cache for "${query}" has been cleared.` }); } else { res.status(404).json({ message: `No cache entry found for "${query}".` }); } } else { searchCache.clear(); console.log("ADMIN ACTION: Full search cache has been cleared."); res.status(200).json({ message: 'Full search cache has been cleared successfully.' }); } });
+app.post('/admin/toggle-queue', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); isQueueProcessingPaused = !isQueueProcessingPaused; const message = `Job queue processing has been ${isQueueProcessingPaused ? 'PAUSED' : 'RESUMED'}.`; console.log(`ADMIN ACTION: ${message}`); if (!isQueueProcessingPaused) dispatchJob(); res.json({ isQueuePaused: isQueueProcessingPaused, message }); });
+app.post('/admin/clear-queue', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); jobQueue.length = 0; console.log("ADMIN ACTION: Job queue has been cleared."); res.json({ message: 'Job queue has been cleared successfully.' }); });
+app.post('/admin/disconnect-worker', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); if (workerSocket) { workerSocket.close(); console.log("ADMIN ACTION: Forcibly disconnected the worker."); res.json({ message: 'Worker has been disconnected.' }); } else { res.status(404).json({ message: 'No worker is currently connected.' }); } });
+app.post('/admin/clear-image-cache', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); imageCache.clear(); await saveImageCacheToFile(); console.log("ADMIN ACTION: Permanent image cache has been cleared."); res.json({ message: 'The permanent image cache has been cleared.' }); });
+app.post('/admin/clear-stats', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); trafficLog.totalSearches = 0; trafficLog.uniqueVisitors.clear(); trafficLog.searchHistory = []; searchTermFrequency.clear(); console.log("ADMIN ACTION: All traffic stats and search history have been cleared."); res.json({ message: 'All traffic stats and search history have been cleared.' }); });
+app.post('/admin/set-theme', async (req, res) => { const { code, theme } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const validThemes = ['default', 'dark', 'retro', 'sepia', 'solarized', 'synthwave']; if (theme && validThemes.includes(theme)) { liveState.theme = theme; await updateLiveStateFile(); console.log(`ADMIN ACTION: Global theme changed to "${theme}".`); res.json({ message: `Theme changed to ${theme}.` }); } else { res.status(400).json({ error: 'Invalid theme specified.' }); } });
+app.post('/admin/trigger-rain', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); liveState.rainEventTimestamp = Date.now(); await updateLiveStateFile(); console.log("ADMIN ACTION: Triggered global 'Make It Rain' event."); res.json({ message: 'Rain event triggered for all active users.' }); });
+
+async function startServer() {
+    const pLimitModule = await import('p-limit');
+    limit = pLimitModule.default(2);
     
-    if (showNotification) {
-        const prettyThemeName = themeName.charAt(0).toUpperCase() + themeName.slice(1);
-        themeNotificationEl.innerHTML = `<b>Theme changed to: ${prettyThemeName}</b>`;
-        themeNotificationEl.classList.remove('hidden');
-
-        if (notificationTimeout) clearTimeout(notificationTimeout);
-        notificationTimeout = setTimeout(() => {
-            themeNotificationEl.classList.add('hidden');
-        }, 2000);
-    }
+    await loadImageCacheFromFile();
+    await updateLiveStateFile();
+    server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
 }
 
-async function initializeState() {
-    try {
-        const response = await fetch(`/live_state.json?t=${Date.now()}`);
-        if (!response.ok) return;
-        const data = await response.json();
-        
-        if (data.theme) {
-            applyTheme(data.theme, false);
-        }
-        if (data.rainEventTimestamp) {
-            lastSeenRainEvent = data.rainEventTimestamp;
-        }
-    } catch (error) {
-        console.error("Failed to initialize live state:", error);
-    } finally {
-        setInterval(pollForLiveState, 5000);
-    }
-}
-
-// Initial call
-initializeState();
-
-
-// --- ADMIN PANEL LOGIC ---
-const adminButton = document.getElementById('admin-button');
-const adminPanel = document.getElementById('admin-panel');
-const closeAdminPanel = document.getElementById('close-admin-panel');
-let currentAdminCode = null;
-const totalSearchesEl = document.getElementById('total-searches');
-const uniqueVisitorsEl = document.getElementById('unique-visitors');
-const usersOnlineEl = document.getElementById('users-online');
-const searchHistoryListEl = document.getElementById('search-history-list');
-const maintenanceStatusEl = document.getElementById('maintenance-status');
-const workerStatusEl = document.getElementById('worker-status');
-const activeJobsCountEl = document.getElementById('active-jobs-count');
-const activeJobsListEl = document.getElementById('active-jobs-list');
-const jobQueueCountEl = document.getElementById('job-queue-count');
-const jobQueueListEl = document.getElementById('job-queue-list');
-const queueStatusEl = document.getElementById('queue-status');
-const imageCacheSizeEl = document.getElementById('image-cache-size');
-const toggleMaintenanceButton = document.getElementById('toggle-maintenance-button');
-const clearFullCacheButton = document.getElementById('clear-full-cache-button');
-const singleCacheClearForm = document.getElementById('single-cache-clear-form');
-const singleCacheInput = document.getElementById('single-cache-input');
-const toggleQueueButton = document.getElementById('toggle-queue-button');
-const disconnectWorkerButton = document.getElementById('disconnect-worker-button');
-const clearQueueButton = document.getElementById('clear-queue-button');
-const clearImageCacheButton = document.getElementById('clear-image-cache-button');
-const clearStatsButton = document.getElementById('clear-stats-button');
-const makeItRainButton = document.getElementById('make-it-rain-button');
-const currentThemeDisplay = document.getElementById('current-theme-display');
-const topSearchesListEl = document.getElementById('top-searches-list');
-
-adminButton.addEventListener('click', () => { const code = prompt("Please enter the admin code:"); if (code) { fetchAdminData(code); } });
-closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'none'; });
-adminPanel.addEventListener('click', (event) => { if (event.target === adminPanel) { adminPanel.style.display = 'none'; } });
-toggleMaintenanceButton.addEventListener('click', () => performAdminAction('/admin/toggle-maintenance', 'toggle maintenance'));
-clearFullCacheButton.addEventListener('click', () => clearCache(true));
-singleCacheClearForm.addEventListener('submit', (e) => { e.preventDefault(); clearCache(false); });
-toggleQueueButton.addEventListener('click', () => performAdminAction('/admin/toggle-queue', 'toggle queue'));
-disconnectWorkerButton.addEventListener('click', () => performAdminAction('/admin/disconnect-worker', 'disconnect worker', 'Are you sure you want to disconnect the worker?'));
-clearQueueButton.addEventListener('click', () => performAdminAction('/admin/clear-queue', 'clear queue', 'Are you sure you want to clear the entire job queue?'));
-clearImageCacheButton.addEventListener('click', () => performAdminAction('/admin/clear-image-cache', 'clear image cache', 'Are you sure you want to clear the permanent image cache?'));
-clearStatsButton.addEventListener('click', () => performAdminAction('/admin/clear-stats', 'clear stats', 'Are you sure you want to clear ALL traffic stats and search history?'));
-document.getElementById('theme-controls').addEventListener('click', (event) => { if (event.target.classList.contains('theme-button')) { const theme = event.target.dataset.theme; setTheme(theme); } });
-makeItRainButton.addEventListener('click', () => performAdminAction('/admin/trigger-rain', 'trigger rain'));
-
-async function fetchAdminData(code) { currentAdminCode = code; try { const response = await fetch('/admin/traffic-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }), }); if (!response.ok) { alert('Incorrect code.'); return; } const data = await response.json(); workerStatusEl.textContent = data.workerStatus; workerStatusEl.className = data.workerStatus === 'Connected' ? 'enabled' : 'disabled'; updateQueueStatus(data.isQueuePaused); jobQueueCountEl.textContent = data.jobQueue.length; jobQueueListEl.innerHTML = ''; if (data.jobQueue.length > 0) { data.jobQueue.forEach(job => { const li = document.createElement('li'); li.textContent = `"${job}"`; jobQueueListEl.appendChild(li); }); } else { jobQueueListEl.innerHTML = '<li>Queue is empty.</li>'; } activeJobsCountEl.textContent = data.activeJobs.length; activeJobsListEl.innerHTML = ''; if (data.activeJobs.length > 0) { data.activeJobs.forEach(job => { const li = document.createElement('li'); li.textContent = `"${job}"`; activeJobsListEl.appendChild(li); }); } else { activeJobsListEl.innerHTML = '<li>No active jobs.</li>'; } imageCacheSizeEl.textContent = data.imageCacheSize; updateMaintenanceStatus(data.isServiceDisabled); totalSearchesEl.textContent = data.totalSearches; uniqueVisitorsEl.textContent = data.uniqueVisitors; usersOnlineEl.textContent = data.onlineUsers; searchHistoryListEl.innerHTML = ''; if (data.searchHistory.length > 0) { data.searchHistory.forEach(item => { const li = document.createElement('li'); const timestamp = new Date(item.timestamp).toLocaleString(); li.textContent = `"${item.query}" at ${timestamp}`; searchHistoryListEl.appendChild(li); }); } else { searchHistoryListEl.innerHTML = '<li>No searches recorded yet.</li>'; } currentThemeDisplay.textContent = data.currentTheme.charAt(0).toUpperCase() + data.currentTheme.slice(1); topSearchesListEl.innerHTML = ''; if (data.topSearches && data.topSearches.length > 0) { data.topSearches.forEach(item => { const li = document.createElement('li'); li.textContent = `"${item.term}" (${item.count} times)`; topSearchesListEl.appendChild(li); }); } else { topSearchesListEl.innerHTML = '<li>No searches yet.</li>'; } adminPanel.style.display = 'flex'; } catch (error) { console.error("Error fetching admin data:", error); alert("An error occurred while fetching stats."); } }
-async function performAdminAction(url, actionName, confirmation = null, body = {}) { if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; } if (confirmation && !confirm(confirmation)) return; try { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, ...body }), }); const data = await response.json(); if (!response.ok) throw new Error(data.message || `Failed to ${actionName}.`); if (data.message) alert(data.message); if (url.includes('set-theme') || url.includes('trigger-rain')) { pollForLiveState(); } fetchAdminData(currentAdminCode); } catch (error) { console.error(`Error during ${actionName}:`, error); alert(`An error occurred: ${error.message}`); } }
-async function setTheme(themeName) { await performAdminAction('/admin/set-theme', 'set theme', null, { theme: themeName }); }
-async function clearCache(isFullClear) { const queryToClear = singleCacheInput.value.trim(); if (!isFullClear && !queryToClear) { alert("Please enter a query to clear."); return; } const confirmation = isFullClear ? "Are you sure you want to clear the entire search cache?" : null; if (confirmation && !confirm(confirmation)) return; try { const response = await fetch('/admin/clear-cache', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, query: isFullClear ? null : queryToClear }), }); const data = await response.json(); if (!response.ok) throw new Error(data.message); alert(data.message); if (!isFullClear) singleCacheInput.value = ''; fetchAdminData(currentAdminCode); } catch (error) { console.error("Error clearing cache:", error); alert(`An error occurred: ${error.message}`); } }
-function updateMaintenanceStatus(isDisabled) { if (isDisabled) { maintenanceStatusEl.textContent = 'DISABLED'; maintenanceStatusEl.className = 'disabled'; } else { maintenanceStatusEl.textContent = 'ENABLED'; maintenanceStatusEl.className = 'enabled'; } }
-function updateQueueStatus(isPaused) { if (isPaused) { queueStatusEl.textContent = 'PAUSED'; queueStatusEl.className = 'disabled'; } else { queueStatusEl.textContent = 'RUNNING'; queueStatusEl.className = 'enabled'; } }
+startServer();
