@@ -42,3 +42,58 @@ h1 { text-align: center; color: #1a202c; margin-bottom: 10px }
 #search-history-list { list-style-type: none; padding-left: 0; font-size: 14px; color: #4a5568; }
 #search-history-list li { padding: 8px; border-bottom: 1px solid #e2e8f0; }
 #search-history-list li:last-child { border-bottom: none; }
+/* Add these styles to the bottom of your style.css file */
+
+.admin-section {
+    padding: 15px 0;
+    border-bottom: 1px solid #e2e8f0;
+}
+.admin-section:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+.admin-section h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #2d3748;
+}
+#worker-status.enabled, #maintenance-status.enabled {
+    color: #38a169;
+    font-weight: bold;
+}
+#worker-status.disabled, #maintenance-status.disabled {
+    color: #e53e3e;
+    font-weight: bold;
+}
+#active-jobs-list {
+    list-style-type: disc;
+    padding-left: 20px;
+    margin-top: 5px;
+    font-size: 14px;
+    color: #4a5568;
+}
+.cache-controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+    align-items: center;
+}
+.cache-controls button {
+    padding: 8px 12px;
+    font-size: 14px;
+    background-color: #e53e3e;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+.cache-controls button:hover {
+    background-color: #c53030;
+}
+.cache-controls input {
+    flex-grow: 1;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e0;
+    border-radius: 6px;
+}
