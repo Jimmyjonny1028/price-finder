@@ -1,4 +1,4 @@
-// public/script.js (FINAL - Silent Polling Version)
+// public/script.js (FINAL - With New Admin Panel Logic)
 
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
@@ -19,59 +19,114 @@ sortSelect.addEventListener('change', applyFiltersAndSort);
 storeFilterSelect.addEventListener('change', applyFiltersAndSort);
 conditionFilterSelect.addEventListener('change', applyFiltersAndSort);
 
-async function handleSearch(event) {
-    event.preventDefault();
-    const searchTerm = searchInput.value.trim();
-    if (!searchTerm) { resultsContainer.innerHTML = '<p>Please enter a product to search for.</p>'; return; }
-    searchButton.disabled = true;
-    controlsContainer.style.display = 'none';
-    resultsContainer.innerHTML = '';
-    let messageIndex = 0;
-    loaderText.textContent = loadingMessages[messageIndex];
-    loader.classList.remove('hidden');
-    loader.classList.remove('polling');
-    loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000);
-    try {
-        const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`);
-        if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error || `Server returned an error: ${response.statusText}`); }
-        if (response.status === 202) {
-            loader.classList.add('polling');
-            pollForResults(searchTerm); return;
-        }
-        const results = await response.json();
-        if (results.length > 0) { fullResults = results; populateAndShowControls(); applyFiltersAndSort(); }
-        else { resultsContainer.innerHTML = `<p>No cached results found.</p>`; }
-    } catch (error) { console.error("Failed to fetch data:", error); resultsContainer.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`;
-    } finally { if (!loader.classList.contains('polling')) { searchButton.disabled = false; loader.classList.add('hidden'); clearInterval(loadingInterval); } }
-}
-
-function pollForResults(query, attempt = 1) {
-    const maxAttempts = 60; const interval = 5000;
-    if (attempt > maxAttempts) { loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">The search took too long. Please check your local scraper and backup API, then try again.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); return; }
-    
-    fetch(`/results/${encodeURIComponent(query)}`)
-        .then(res => {
-            if (res.status === 200) return res.json();
-            if (res.status === 202) {
-                setTimeout(() => pollForResults(query, attempt + 1), interval);
-                return null;
-            }
-            throw new Error('Server returned an error during polling.');
-        })
-        .then(results => {
-            if (results) {
-                console.log("Polling successful. Found results.");
-                loader.classList.remove('polling'); loader.classList.add('hidden'); searchButton.disabled = false; clearInterval(loadingInterval);
-                fullResults = results;
-                if (fullResults.length === 0) { resultsContainer.innerHTML = `<p>The scraper and backup API found no matching results for "${query}".</p>`; }
-                else { populateAndShowControls(); applyFiltersAndSort(); }
-            }
-        })
-        .catch(error => { console.error("Polling failed:", error); loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">An error occurred while checking for results.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); });
-}
-
+async function handleSearch(event) { event.preventDefault(); const searchTerm = searchInput.value.trim(); if (!searchTerm) { resultsContainer.innerHTML = '<p>Please enter a product to search for.</p>'; return; } searchButton.disabled = true; controlsContainer.style.display = 'none'; resultsContainer.innerHTML = ''; let messageIndex = 0; loaderText.textContent = loadingMessages[messageIndex]; loader.classList.remove('hidden'); loader.classList.remove('polling'); loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000); try { const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`); if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error || `Server returned an error: ${response.statusText}`); } if (response.status === 202) { loader.classList.add('polling'); pollForResults(searchTerm); return; } const results = await response.json(); if (results.length > 0) { fullResults = results; populateAndShowControls(); applyFiltersAndSort(); } else { resultsContainer.innerHTML = `<p>No cached results found.</p>`; } } catch (error) { console.error("Failed to fetch data:", error); resultsContainer.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`; } finally { if (!loader.classList.contains('polling')) { searchButton.disabled = false; loader.classList.add('hidden'); clearInterval(loadingInterval); } } }
+function pollForResults(query, attempt = 1) { const maxAttempts = 60; const interval = 5000; if (attempt > maxAttempts) { loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">The search took too long. Please check your local scraper and backup API, then try again.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); return; } fetch(`/results/${encodeURIComponent(query)}`).then(res => { if (res.status === 200) return res.json(); if (res.status === 202) { setTimeout(() => pollForResults(query, attempt + 1), interval); return null; } throw new Error('Server returned an error during polling.'); }).then(results => { if (results) { console.log("Polling successful. Found results."); loader.classList.remove('polling'); loader.classList.add('hidden'); searchButton.disabled = false; clearInterval(loadingInterval); fullResults = results; if (fullResults.length === 0) { resultsContainer.innerHTML = `<p>The scraper and backup API found no matching results for "${query}".</p>`; } else { populateAndShowControls(); applyFiltersAndSort(); } } }).catch(error => { console.error("Polling failed:", error); loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">An error occurred while checking for results.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); }); }
 function applyFiltersAndSort() { const sortBy = sortSelect.value; const storeFilter = storeFilterSelect.value; const conditionFilter = conditionFilterSelect.value; let processedResults = [...fullResults]; if (conditionFilter === 'new') { processedResults = processedResults.filter(item => item.condition === 'New'); } else if (conditionFilter === 'refurbished') { processedResults = processedResults.filter(item => item.condition === 'Refurbished'); } if (storeFilter !== 'all') { processedResults = processedResults.filter(item => item.store === storeFilter); } if (sortBy === 'price-asc') { processedResults.sort((a, b) => a.price - b.price); } else if (sortBy === 'price-desc') { processedResults.sort((a, b) => b.price - a.price); } renderResults(processedResults); }
 function populateAndShowControls() { sortSelect.value = 'price-asc'; storeFilterSelect.innerHTML = '<option value="all">All Stores</option>'; conditionFilterSelect.value = 'all'; const stores = [...new Set(fullResults.map(item => item.store))].sort(); stores.forEach(store => { const option = document.createElement('option'); option.value = store; option.textContent = store; storeFilterSelect.appendChild(option); }); controlsContainer.style.display = 'flex'; }
 function renderResults(results) { resultsContainer.innerHTML = `<h2>Best Prices for ${searchInput.value.trim()}</h2>`; if (results.length === 0) { resultsContainer.innerHTML += `<p>No results match the current filters.</p>`; return; } results.forEach(offer => { const card = document.createElement('div'); card.className = 'result-card'; const isLinkValid = offer.url && offer.url !== '#'; const linkAttributes = isLinkValid ? `href="${offer.url}" target="_blank" rel="noopener noreferrer"` : `href="#" class="disabled-link"`; const conditionBadge = offer.condition === 'Refurbished' ? `<span class="condition-badge">Refurbished</span>` : ''; card.innerHTML = ` <div class="result-image"> <img src="${offer.image}" alt="${offer.title}" onerror="this.style.display='none';"> </div> <div class="result-info"> <h3>${offer.title}</h3> <p>Sold by: <strong>${offer.store}</strong> ${conditionBadge}</p> </div> <div class="result-price"> <a ${linkAttributes}> ${offer.price_string} </a> </div> `; resultsContainer.appendChild(card); }); }
-const adminButton = document.getElementById('admin-button'); const adminPanel = document.getElementById('admin-panel'); const closeAdminPanel = document.getElementById('close-admin-panel'); const totalSearchesEl = document.getElementById('total-searches'); const uniqueVisitorsEl = document.getElementById('unique-visitors'); const searchHistoryListEl = document.getElementById('search-history-list'); const toggleMaintenanceButton = document.getElementById('toggle-maintenance-button'); const maintenanceStatusEl = document.getElementById('maintenance-status'); let currentAdminCode = null;
-adminButton.addEventListener('click', () => { const code = prompt("Please enter the admin code:"); if (code) { fetchAdminData(code); } }); closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'none'; }); adminPanel.addEventListener('click', (event) => { if (event.target === adminPanel) { adminPanel.style.display = 'none'; } }); toggleMaintenanceButton.addEventListener('click', toggleMaintenanceMode); async function fetchAdminData(code) { currentAdminCode = code; try { const response = await fetch('/admin/traffic-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }), }); if (!response.ok) { alert('Incorrect code.'); return; } const data = await response.json(); totalSearchesEl.textContent = data.totalSearches; uniqueVisitorsEl.textContent = data.uniqueVisitors; updateMaintenanceStatus(data.isServiceDisabled); searchHistoryListEl.innerHTML = ''; if(data.searchHistory.length > 0) { data.searchHistory.forEach(item => { const li = document.createElement('li'); const timestamp = new Date(item.timestamp).toLocaleString(); li.textContent = `"${item.query}" at ${timestamp}`; searchHistoryListEl.appendChild(li); }); } else { searchHistoryListEl.innerHTML = '<li>No searches recorded yet.</li>'; } adminPanel.style.display = 'flex'; } catch (error) { console.error("Error fetching admin data:", error); alert("An error occurred while fetching stats."); } } async function toggleMaintenanceMode() { if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; } try { const response = await fetch('/admin/toggle-maintenance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode }), }); if (!response.ok) { throw new Error("Failed to toggle maintenance mode."); } const data = await response.json(); updateMaintenanceStatus(data.isServiceDisabled); alert(data.message); } catch (error) { console.error("Error toggling maintenance mode:", error); alert("An error occurred."); } } function updateMaintenanceStatus(isDisabled) { if (isDisabled) { maintenanceStatusEl.textContent = 'DISABLED'; maintenanceStatusEl.className = 'disabled'; } else { maintenanceStatusEl.textContent = 'ENABLED'; maintenanceStatusEl.className = 'enabled'; } }
+
+// --- MODIFICATION: Updated Admin Panel Logic ---
+const adminButton = document.getElementById('admin-button');
+const adminPanel = document.getElementById('admin-panel');
+const closeAdminPanel = document.getElementById('close-admin-panel');
+const totalSearchesEl = document.getElementById('total-searches');
+const uniqueVisitorsEl = document.getElementById('unique-visitors');
+const searchHistoryListEl = document.getElementById('search-history-list');
+const toggleMaintenanceButton = document.getElementById('toggle-maintenance-button');
+const maintenanceStatusEl = document.getElementById('maintenance-status');
+// New element selectors
+const workerStatusEl = document.getElementById('worker-status');
+const activeJobsCountEl = document.getElementById('active-jobs-count');
+const activeJobsListEl = document.getElementById('active-jobs-list');
+const clearFullCacheButton = document.getElementById('clear-full-cache-button');
+const singleCacheClearForm = document.getElementById('single-cache-clear-form');
+const singleCacheInput = document.getElementById('single-cache-input');
+
+let currentAdminCode = null;
+
+adminButton.addEventListener('click', () => { const code = prompt("Please enter the admin code:"); if (code) { fetchAdminData(code); } });
+closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'none'; });
+adminPanel.addEventListener('click', (event) => { if (event.target === adminPanel) { adminPanel.style.display = 'none'; } });
+toggleMaintenanceButton.addEventListener('click', toggleMaintenanceMode);
+clearFullCacheButton.addEventListener('click', clearFullCache);
+singleCacheClearForm.addEventListener('submit', clearSingleCache);
+
+async function fetchAdminData(code) {
+    currentAdminCode = code;
+    try {
+        const response = await fetch('/admin/traffic-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }), });
+        if (!response.ok) { alert('Incorrect code.'); return; }
+        const data = await response.json();
+        
+        // Populate all data fields
+        totalSearchesEl.textContent = data.totalSearches;
+        uniqueVisitorsEl.textContent = data.uniqueVisitors;
+        updateMaintenanceStatus(data.isServiceDisabled);
+        
+        // New live status data
+        workerStatusEl.textContent = data.workerStatus;
+        workerStatusEl.className = data.workerStatus === 'Connected' ? 'enabled' : 'disabled';
+        activeJobsCountEl.textContent = data.activeJobs.length;
+        activeJobsListEl.innerHTML = '';
+        if (data.activeJobs.length > 0) {
+            data.activeJobs.forEach(job => {
+                const li = document.createElement('li');
+                li.textContent = `"${job}"`;
+                activeJobsListEl.appendChild(li);
+            });
+        } else {
+            activeJobsListEl.innerHTML = '<li>No active jobs.</li>';
+        }
+
+        searchHistoryListEl.innerHTML = '';
+        if(data.searchHistory.length > 0) {
+            data.searchHistory.forEach(item => {
+                const li = document.createElement('li');
+                const timestamp = new Date(item.timestamp).toLocaleString();
+                li.textContent = `"${item.query}" at ${timestamp}`;
+                searchHistoryListEl.appendChild(li);
+            });
+        } else {
+            searchHistoryListEl.innerHTML = '<li>No searches recorded yet.</li>';
+        }
+        
+        adminPanel.style.display = 'flex';
+    } catch (error) {
+        console.error("Error fetching admin data:", error);
+        alert("An error occurred while fetching stats.");
+    }
+}
+
+async function toggleMaintenanceMode() { if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; } try { const response = await fetch('/admin/toggle-maintenance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode }), }); if (!response.ok) { throw new Error("Failed to toggle maintenance mode."); } const data = await response.json(); updateMaintenanceStatus(data.isServiceDisabled); alert(data.message); } catch (error) { console.error("Error toggling maintenance mode:", error); alert("An error occurred."); } }
+function updateMaintenanceStatus(isDisabled) { if (isDisabled) { maintenanceStatusEl.textContent = 'DISABLED'; maintenanceStatusEl.className = 'disabled'; } else { maintenanceStatusEl.textContent = 'ENABLED'; maintenanceStatusEl.className = 'enabled'; } }
+
+async function clearFullCache() {
+    if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; }
+    if (!confirm("Are you sure you want to clear the entire search cache?")) return;
+    try {
+        const response = await fetch('/admin/clear-cache', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode }), });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        alert(data.message);
+    } catch (error) {
+        console.error("Error clearing full cache:", error);
+        alert(`An error occurred: ${error.message}`);
+    }
+}
+
+async function clearSingleCache(event) {
+    event.preventDefault();
+    if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; }
+    const queryToClear = singleCacheInput.value.trim();
+    if (!queryToClear) { alert("Please enter a search query to clear."); return; }
+    try {
+        const response = await fetch('/admin/clear-single-cache', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, query: queryToClear }), });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message);
+        alert(data.message);
+        singleCacheInput.value = '';
+    } catch (error) {
+        console.error("Error clearing single cache:", error);
+        alert(`An error occurred: ${error.message}`);
+    }
+}
