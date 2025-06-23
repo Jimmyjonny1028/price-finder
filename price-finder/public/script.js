@@ -1,4 +1,4 @@
-// public/script.js (FINAL - Aware of Backup API Status)
+// public/script.js (FINAL - With Silent Polling)
 
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
@@ -30,12 +30,13 @@ async function handleSearch(event) {
     loaderText.textContent = loadingMessages[messageIndex];
     loader.classList.remove('hidden');
     loader.classList.remove('polling');
+    // The loading message will now cycle continuously until results are found.
     loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000);
     try {
         const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`);
         if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error || `Server returned an error: ${response.statusText}`); }
         if (response.status === 202) {
-            loader.classList.add('polling'); loaderText.textContent = "Job sent. Checking for results...";
+            loader.classList.add('polling');
             pollForResults(searchTerm); return;
         }
         const results = await response.json();
@@ -52,15 +53,10 @@ function pollForResults(query, attempt = 1) {
     fetch(`/results/${encodeURIComponent(query)}`)
         .then(res => {
             if (res.status === 200) { return res.json(); } // Success
-            if (res.status === 202) { // Still working
-                // MODIFICATION: Check for a custom message from the server
-                res.json().then(body => {
-                    if (body && body.message) {
-                        loaderText.textContent = body.message; // "Searching backup API..."
-                        clearInterval(loadingInterval); // Stop cycling through default messages
-                    }
-                }).catch(() => { /* No JSON body, that's fine */ });
-
+            
+            // MODIFICATION: Simplified logic for "Still working"
+            if (res.status === 202) {
+                console.log(`Attempt ${attempt}: Results not ready, checking again in ${interval}ms.`); 
                 setTimeout(() => pollForResults(query, attempt + 1), interval);
                 return null; // Stop the promise chain
             }
