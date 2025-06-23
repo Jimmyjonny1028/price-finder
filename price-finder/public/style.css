@@ -1,4 +1,5 @@
 /* public/style.css (FINAL) */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&display=swap');
 
 body.theme-default {
     --bg-color: #f0f2f5;
@@ -41,7 +42,6 @@ body.theme-dark {
     --disabled-color: #718096;
     --admin-button-bg: #4a5568;
     --font-family: 'Inter', sans-serif;
-    --font-family-monospace: 'Courier New', Courier, monospace;
 }
 
 body.theme-retro {
@@ -63,11 +63,76 @@ body.theme-retro {
     --disabled-color: #008a23;
     --admin-button-bg: #00ff41;
     --font-family: var(--font-family-monospace);
-    --font-family-monospace: 'Courier New', Courier, monospace;
 }
 
+/* ### NEW THEMES START HERE ### */
+body.theme-sepia {
+    --bg-color: #f4f0e8;
+    --text-color: #5b4636;
+    --text-color-light: #8d6e63;
+    --text-color-inverted: #fcfaf5;
+    --container-bg: #fcfaf5;
+    --container-shadow: rgba(0, 0, 0, .1);
+    --input-border-color: #d7ccc8;
+    --primary-color: #8d6e63;
+    --primary-color-hover: #6d4c41;
+    --primary-color-focus-shadow: rgba(141, 110, 99, .5);
+    --secondary-bg-color: #efebe9;
+    --border-color: #d7ccc8;
+    --accent-color-success: #689f38;
+    --accent-color-danger: #d32f2f;
+    --accent-color-warning: #ffa000;
+    --disabled-color: #b0bec5;
+    --admin-button-bg: #5d4037;
+    --font-family: Georgia, serif;
+}
+
+body.theme-solarized {
+    --bg-color: #002b36;
+    --text-color: #839496;
+    --text-color-light: #586e75;
+    --text-color-inverted: #002b36;
+    --container-bg: #073642;
+    --container-shadow: rgba(0, 0, 0, .2);
+    --input-border-color: #586e75;
+    --primary-color: #268bd2;
+    --primary-color-hover: #2aa198;
+    --primary-color-focus-shadow: rgba(38, 139, 210, .5);
+    --secondary-bg-color: #001f27;
+    --border-color: #003442;
+    --accent-color-success: #859900;
+    --accent-color-danger: #dc322f;
+    --accent-color-warning: #b58900;
+    --disabled-color: #586e75;
+    --admin-button-bg: #2aa198;
+    --font-family: 'Inter', sans-serif;
+}
+
+body.theme-synthwave {
+    --bg-color: #241B2F;
+    --text-color: #F4F4F4;
+    --text-color-light: #999;
+    --text-color-inverted: #241B2F;
+    --container-bg: #1A1423;
+    --container-shadow: rgba(255, 0, 191, .2);
+    --input-border-color: #FF00BF;
+    --primary-color: #00FFFF;
+    --primary-color-hover: #33ffff;
+    --primary-color-focus-shadow: rgba(0, 255, 255, .5);
+    --secondary-bg-color: #382F44;
+    --border-color: #FF00BF;
+    --accent-color-success: #70FF00;
+    --accent-color-danger: #F92C86;
+    --accent-color-warning: #F4E22E;
+    --disabled-color: #999;
+    --admin-button-bg: #F92C86;
+    --font-family: 'Orbitron', sans-serif;
+}
+
+/* Base styles using variables */
 body { font-family: var(--font-family); background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px; transition: background-color .3s, color .3s; }
 .container { max-width: 800px; margin: 40px auto; padding: 30px; background-color: var(--container-bg); border-radius: 12px; box-shadow: 0 4px 12px var(--container-shadow); border: 1px solid var(--border-color); }
+/* ... the rest of the CSS file is identical to the last version ... */
 h1 { text-align: center; color: var(--text-color); margin-bottom: 10px }
 .subtitle { text-align: center; color: var(--text-color-light); margin-top: 0; margin-bottom: 30px }
 #search-form { display: flex; gap: 10px; margin-bottom: 30px }
@@ -120,6 +185,9 @@ h1 { text-align: center; color: var(--text-color); margin-bottom: 10px }
 .admin-controls button.theme-button[data-theme="default"] { background-color: #3182ce; }
 .admin-controls button.theme-button[data-theme="dark"] { background-color: #63b3ed; color: #1a202c; }
 .admin-controls button.theme-button[data-theme="retro"] { background-color: #00ff41; color: #0d0d0d; }
+.admin-controls button.theme-button[data-theme="sepia"] { background-color: #8d6e63; }
+.admin-controls button.theme-button[data-theme="solarized"] { background-color: #268bd2; }
+.admin-controls button.theme-button[data-theme="synthwave"] { background-color: #00FFFF; color: #1A1423; }
 #worker-status.enabled, #maintenance-status.enabled, #queue-status.enabled { color: var(--accent-color-success); font-weight: bold; }
 #worker-status.disabled, #maintenance-status.disabled, #queue-status.disabled { color: var(--accent-color-danger); font-weight: bold; }
 .status-list { list-style-type: none; padding-left: 0; margin-top: 5px; font-size: 14px; color: var(--text-color-light); max-height: 120px; overflow-y: auto; background-color: var(--secondary-bg-color); border: 1px solid var(--border-color); border-radius: 4px; padding-top: 5px; padding-bottom: 5px; }
