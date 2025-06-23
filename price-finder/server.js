@@ -1,4 +1,4 @@
-// server.js (FINAL - With Concurrent Job Dispatching)
+// server.js (FINAL - Correct Handshake Logic)
 
 const express = require('express');
 const cors = require('cors');
@@ -23,24 +23,20 @@ app.use(express.static('public'));
 const ADMIN_CODE = process.env.ADMIN_CODE;
 const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
 
-// --- The Job Queue and Worker Status ---
 const jobQueue = [];
 let workerSocket = null;
-// MODIFICATION: The 'isWorkerBusy' flag is no longer needed. The worker will tell us when it's ready.
 
 // =================================================================
 // WEBSOCKET SERVER - Manages the connection and job queue
 // =================================================================
 const wss = new WebSocketServer({ server });
 
-// MODIFICATION: This function is now simpler. It just sends a job if one exists.
-function triggerNextJob() {
-    // If there's no worker or the queue is empty, do nothing.
+function dispatchJob() {
     if (!workerSocket || jobQueue.length === 0) {
         return;
     }
-    const nextQuery = jobQueue.shift(); // Get the oldest job from the front of the queue
-    console.log(`Worker requested a job. Sending job for "${nextQuery}"...`);
+    const nextQuery = jobQueue.shift();
+    console.log(`Worker requested a job. Dispatching job for "${nextQuery}"...`);
     workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery }));
 }
 
@@ -59,12 +55,11 @@ wss.on('connection', (ws, req) => {
         try {
             const msg = JSON.parse(message);
             
-            // MODIFICATION: The worker is telling us it has a free slot.
+            // The worker has a free slot and is asking for work.
             if (msg.type === 'REQUEST_JOB') {
-                console.log("Worker is requesting a job.");
-                triggerNextJob();
+                dispatchJob();
             }
-            // We still log when a job is done, but it no longer triggers the next job.
+            // Acknowledge completion, but this no longer triggers the next job.
             else if (msg.type === 'JOB_COMPLETE') {
                 console.log(`Worker has completed job for "${msg.query}".`);
             }
@@ -73,14 +68,14 @@ wss.on('connection', (ws, req) => {
     ws.on('close', () => {
         console.log("❌ The worker has disconnected.");
         workerSocket = null;
-        jobQueue.length = 0; // Clear the queue on disconnect
+        jobQueue.length = 0;
         console.log("Job queue has been cleared.");
     });
     ws.on('error', (error) => { console.error("WebSocket error:", error); });
 });
 
 // =================================================================
-// HELPER FUNCTIONS (No changes needed here)
+// HELPER FUNCTIONS (No changes here)
 // =================================================================
 const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
 const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
@@ -104,15 +99,17 @@ app.get('/search', async (req, res) => {
     if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { console.log(`Serving results for "${query}" from CACHE!`); return res.json(cachedData.results); } }
 
     if (workerSocket) {
-        // Only add to queue if it's not already in there
         if (!jobQueue.includes(query)) {
             jobQueue.push(query);
             console.log(`Query "${query}" added to the job queue. Position: ${jobQueue.length}`);
+            
+            // MODIFICATION: Send a polite notification to the worker.
+            // This tells the worker "new work is available" without forcing it.
+            workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' }));
+
         } else {
             console.log(`Query "${query}" is already in the queue.`);
         }
-        // MODIFICATION: Tell the worker to check for this new job.
-        workerSocket.send(JSON.stringify({ type: 'REQUEST_JOB' }));
         return res.status(202).json({ message: "Search has been queued and will be processed by your local worker." });
     } else {
         return res.status(503).json({ error: "Service is temporarily unavailable. The scraper worker is not connected." });
