@@ -1,43 +1,3 @@
-Excellent, that log gives us the exact information we need.
-
-This is a classic **"Rate Limit Exceeded"** error (Code 429). In simple terms, your application is working so fast that it's sending requests to the Google Image API more quickly than Google's servers allow.
-
-Let's break down what the error message tells us:
-
-  * `"message": "Quota exceeded for quota metric 'Queries' and limit 'Queries per minute per user'..."`
-  * `"quota_limit": "DefaultPerMinutePerUser"`
-
-This is not the "100 per day" limit we discussed earlier. This is a different, much more common limit designed to prevent server overload: a **per-minute request quota**. Your app is trying to do too much in a single minute.
-
-### Why Is This Happening?
-
-The log shows multiple "Enriching X results..." messages happening almost simultaneously. When several different searches are processed at once, each one tries to fetch its images immediately.
-
-For example, if four different searches happen at the same time, your server could try to make `4 searches * 3 images/search = 12` API calls in just a couple of seconds. This burst of activity is what triggers Google's rate limit.
-
-### The Solution: Implement a Request Throttler
-
-The professional way to solve this is to implement a **rate limiter** (or "throttler"). This creates a managed queue for your requests to Google, ensuring that no matter how many requests come in at once, they are sent out at a controlled, steady pace that won't trigger the limit.
-
-We will use a very popular and lightweight library called `p-limit` to do this.
-
-#### Step 1: Install the Library
-
-Open your server's terminal and run this command:
-
-```bash
-npm install p-limit
-```
-
-#### Step 2: Update `server.js`
-
-I have updated the `server.js` file to include this rate limiter. The changes are minimal: we import the library, create a limiter that allows a maximum of **2 requests per second**, and then wrap our Google API call inside it.
-
-This ensures that even if 100 requests come in at the same instant, they will be queued and processed smoothly at a rate of 2 per second, keeping you well within Google's limits.
-
-Here is the complete and updated `server.js` file.
-
-```javascript
 // server.js (FINAL - Production Ready)
 
 const express = require('express');
@@ -227,4 +187,3 @@ async function startServer() {
 }
 
 startServer();
-```
