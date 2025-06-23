@@ -32,35 +32,93 @@ async function handleSearch(event) {
     loader.classList.remove('polling');
     loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000);
     try {
+        // This initial request *starts* the job.
         const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`);
-        if (response.status === 202) { loader.classList.add('polling'); loaderText.textContent = "Job sent. Checking for results..."; pollForResults(searchTerm); return; }
-        if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error || `Server returned an error: ${response.statusText}`); }
-        const results = await response.json();
-        if (results.length > 0) { fullResults = results; populateAndShowControls(); applyFiltersAndSort(); }
-        else { resultsContainer.innerHTML = `<p>No cached results found. Please ensure your local scraper is running and try again.</p>`; }
-    } catch (error) { console.error("Failed to fetch data:", error); resultsContainer.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`;
-    } finally { if (!loader.classList.contains('polling')) { searchButton.disabled = false; loader.classList.add('hidden'); clearInterval(loadingInterval); } }
+        
+        // This is the key error handling block. If the server sends a 503 (maintenance)
+        // or any other error, this block will catch it and display the specific message.
+        if (!response.ok) {
+            const errorData = await response.json(); 
+            throw new Error(errorData.error || `Server returned an error: ${response.statusText}`);
+        }
+
+        // If the server responds with 202, the job was queued, and we start polling.
+        if (response.status === 202) { 
+            loader.classList.add('polling'); 
+            loaderText.textContent = "Job sent. Checking for results..."; 
+            pollForResults(searchTerm); 
+            return;
+        }
+        
+        // If we get here, it means we got results immediately (from cache).
+        const results = await response.json(); 
+        if (results.length > 0) { 
+            fullResults = results; 
+            populateAndShowControls(); 
+            applyFiltersAndSort(); 
+        } else { 
+            resultsContainer.innerHTML = `<p>No cached results found. Please ensure your local scraper is running and try again.</p>`; 
+        }
+    } catch (error) { 
+        console.error("Failed to fetch data:", error); 
+        resultsContainer.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`;
+    } finally { 
+        if (!loader.classList.contains('polling')) { 
+            searchButton.disabled = false; 
+            loader.classList.add('hidden'); 
+            clearInterval(loadingInterval); 
+        } 
+    }
 }
 
 function pollForResults(query, attempt = 1) {
     const maxAttempts = 60; const interval = 5000;
-    if (attempt > maxAttempts) { loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">The search took too long. Please check your local scraper and try again.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); return; }
-    fetch(`/search?query=${encodeURIComponent(query)}`)
+    if (attempt > maxAttempts) { 
+        loader.classList.remove('polling'); 
+        loader.classList.add('hidden'); 
+        resultsContainer.innerHTML = `<p class="error">The search took too long. Please check your local scraper and try again.</p>`; 
+        searchButton.disabled = false; 
+        clearInterval(loadingInterval); 
+        return; 
+    }
+    
+    // Hitting the new, safe, read-only endpoint for polling.
+    fetch(`/results/${encodeURIComponent(query)}`)
         .then(res => {
-            if (res.status === 202) { console.log(`Attempt ${attempt}: Results not ready, checking again in ${interval}ms.`); setTimeout(() => pollForResults(query, attempt + 1), interval); return null; }
-            if (res.ok) { return res.json(); }
+            if (res.status === 202) { 
+                console.log(`Attempt ${attempt}: Results not ready, checking again in ${interval}ms.`); 
+                setTimeout(() => pollForResults(query, attempt + 1), interval); 
+                return null; 
+            }
+            if (res.ok) { 
+                return res.json(); 
+            }
             throw new Error('Server returned an error during polling.');
         })
         .then(results => {
-            if (results) {
+            if (results) { 
                 console.log("Polling successful. Found results in cache.");
-                loader.classList.remove('polling'); loader.classList.add('hidden'); searchButton.disabled = false; clearInterval(loadingInterval);
+                loader.classList.remove('polling'); 
+                loader.classList.add('hidden'); 
+                searchButton.disabled = false; 
+                clearInterval(loadingInterval);
                 fullResults = results;
-                if (fullResults.length === 0) { resultsContainer.innerHTML = `<p>Your scraper finished, but found no matching results for "${query}".</p>`; }
-                else { populateAndShowControls(); applyFiltersAndSort(); }
+                if (fullResults.length === 0) { 
+                    resultsContainer.innerHTML = `<p>Your scraper finished, but found no matching results for "${query}".</p>`; 
+                } else { 
+                    populateAndShowControls(); 
+                    applyFiltersAndSort(); 
+                }
             }
         })
-        .catch(error => { console.error("Polling failed:", error); loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">An error occurred while checking for results.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); });
+        .catch(error => { 
+            console.error("Polling failed:", error); 
+            loader.classList.remove('polling'); 
+            loader.classList.add('hidden'); 
+            resultsContainer.innerHTML = `<p class="error">An error occurred while checking for results.</p>`; 
+            searchButton.disabled = false; 
+            clearInterval(loadingInterval); 
+        });
 }
 
 function applyFiltersAndSort() {
@@ -91,6 +149,7 @@ function renderResults(results) {
     });
 }
 
+// Admin panel functions are already correct and interact with the fixed server endpoints.
 const adminButton = document.getElementById('admin-button'); const adminPanel = document.getElementById('admin-panel'); const closeAdminPanel = document.getElementById('close-admin-panel'); const totalSearchesEl = document.getElementById('total-searches'); const uniqueVisitorsEl = document.getElementById('unique-visitors'); const searchHistoryListEl = document.getElementById('search-history-list'); const toggleMaintenanceButton = document.getElementById('toggle-maintenance-button'); const maintenanceStatusEl = document.getElementById('maintenance-status'); let currentAdminCode = null;
 adminButton.addEventListener('click', () => { const code = prompt("Please enter the admin code:"); if (code) { fetchAdminData(code); } });
 closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'none'; });
