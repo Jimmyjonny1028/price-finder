@@ -79,24 +79,21 @@ const filterResultsByQuery = (results, query) => { const queryLower = query.toLo
 const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); const allKeywords = [...ACCESSORY_KEYWORDS, ...COMPONENT_KEYWORDS]; return allKeywords.some(keyword => queryLower.includes(keyword)); };
 const extractColorFromTitle = (title) => { const titleLower = title.toLowerCase(); for (const color of COLOR_LIST) { if (titleLower.includes(color)) return color; } return null; };
 
-// ### MODIFIED: This function is now much simpler because the scraper sends clean data ###
+// ### MODIFIED: This function is now much simpler as it receives clean data ###
 function parsePythonResults(results) {
     return results.map(item => {
-        // The title from the scraper now includes the price at the end. We just need to extract it.
-        const priceMatch = item.title.match(/\$\s?[\d,]+(\.\d{2})?/);
-        const priceString = priceMatch ? priceMatch[0] : null;
-        const price = priceString ? parseFloat(priceString.replace(/[^0-9.]/g, '')) : null;
+        // The Python script now sends structured data, so we just parse the price.
+        const price = item.price_string ? parseFloat(item.price_string.replace(/[^0-9.]/g, '')) : null;
 
-        if (!price) return null;
-
-        // The title can now be cleaned of the price string for a better display.
-        const cleanTitle = item.title.replace(priceString, '').trim();
+        if (!price || !item.store || !item.title) {
+            return null; // Reject malformed items
+        }
 
         return {
-            title: cleanTitle,
+            title: item.title,
             price: price,
-            price_string: priceString,
-            store: item.store, // The store is now a separate, clean field!
+            price_string: item.price_string,
+            store: item.store,
             url: item.url || '#'
         };
     }).filter(Boolean);
