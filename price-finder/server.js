@@ -1,7 +1,7 @@
-// server.js (FINAL - With Image Enrichment)
+// server.js (FINAL - Production Ready)
 
 const express = require('express');
-const cors = require('cors');
+const cors =require('cors');
 require('dotenv').config();
 const http = require('http');
 const { WebSocketServer } = require('ws');
@@ -24,7 +24,6 @@ app.use(express.static('public'));
 const ADMIN_CODE = process.env.ADMIN_CODE;
 const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
 const PRICEAPI_COM_KEY = process.env.PRICEAPI_COM_KEY;
-// --- MODIFICATION: New keys for Google Image Search ---
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID;
 
@@ -41,7 +40,6 @@ const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement', 'screen', 'magsafe', 'camera' ];
 const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
 const MIN_MAIN_PRODUCT_PRICE = 400;
-// --- MODIFICATION: List of colors to look for in titles ---
 const COLOR_LIST = ['black', 'white', 'silver', 'gold', 'gray', 'blue', 'red', 'green', 'pink', 'purple', 'yellow', 'orange', 'bronze', 'graphite', 'sierra', 'alpine', 'starlight', 'midnight'];
 
 const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); return REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword)) ? 'Refurbished' : 'New'; };
@@ -56,48 +54,52 @@ function parsePriceApiResults(downloadedJobs) { let allResults = []; for (const 
 
 async function searchPriceApiCom(query) { try { const jobsToSubmit = [{ source: 'amazon', topic: 'product_and_offers', key: 'term', values: query }, { source: 'ebay', topic: 'search_results', key: 'term', values: query, condition: 'any' }, { source: 'google_shopping', topic: 'search_results', key: 'term', values: query, condition: 'any' }]; const jobPromises = jobsToSubmit.map(job => axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', ...job }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message); return null; }) ); const jobResponses = (await Promise.all(jobPromises)).filter(Boolean); if (jobResponses.length === 0) return []; console.log(`[Backup API] Created ${jobResponses.length} jobs for "${query}". Waiting 15s...`); await wait(15000); const resultPromises = jobResponses.map(job => axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to fetch results for job ID ${job.job_id}`, err.response?.data?.message || err.message); return null; }) ); return (await Promise.all(resultPromises)).filter(Boolean); } catch (err) { console.error("A critical error occurred in the searchPriceApiCom function:", err.message); return []; } }
 
-// --- MODIFICATION: New function to fetch images ---
 async function fetchImageForQuery(query) {
     const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A';
-    if (!GOOGLE_API_KEY || !GOOGLE_CSE_ID) return placeholder;
+    if (!GOOGLE_API_KEY || !GOOGLE_CSE_ID) {
+        console.error("Missing GOOGLE_API_KEY or GOOGLE_CSE_ID from .env file.");
+        return placeholder;
+    }
     try {
+        // ### THESE TWO LINES ARE THE ONLY CHANGE ###
+        console.log(`[DEBUG] Using GOOGLE_API_KEY: ${GOOGLE_API_KEY}`);
+        console.log(`[DEBUG] Using GOOGLE_CSE_ID: ${GOOGLE_CSE_ID}`);
+        
         const url = `https://www.googleapis.com/customsearch/v1`;
         const params = { key: GOOGLE_API_KEY, cx: GOOGLE_CSE_ID, q: query, searchType: 'image', num: 1 };
         const response = await axios.get(url, { params });
         return response.data.items?.[0]?.link || placeholder;
     } catch (error) {
-        console.error(`Google Image Search failed for "${query}":`, error.message);
+        console.error(`[FATAL] Google Image Search request failed for query: "${query}"`);
+        if (error.response) {
+            console.error('Error Data:', JSON.stringify(error.response.data, null, 2));
+            console.error('Error Status:', error.response.status);
+            console.error('Error Headers:', error.response.headers);
+        } else if (error.request) {
+            console.error('Error Request:', error.request);
+        } else {
+            console.error('Error Message:', error.message);
+        }
         return placeholder;
     }
 }
 
-// --- MODIFICATION: New function to enrich results with images ---
 async function enrichResultsWithImages(results, baseQuery) {
     if (results.length === 0) return results;
     console.log(`Enriching ${results.length} results with images...`);
-    
-    // 1. Fetch the default image for the base query once.
     const defaultImageUrl = await fetchImageForQuery(baseQuery);
-    
-    // 2. Create a promise for each result to find its specific image.
     const imageEnrichmentPromises = results.map(async (result) => {
         const color = extractColorFromTitle(result.title);
-        let imageUrl = defaultImageUrl; // Start with the default
-
+        let imageUrl = defaultImageUrl;
         if (color) {
-            // If a color is found, try to get a more specific image.
             const specificQuery = `${baseQuery} ${color}`;
             imageUrl = await fetchImageForQuery(specificQuery);
         }
-        
         result.image = imageUrl;
         return result;
     });
-
-    // 3. Run all image searches concurrently and return the results.
     return Promise.all(imageEnrichmentPromises);
 }
-
 
 app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } } catch (e) {} const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData.results); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
 app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey).results); } else { return res.status(202).send(); }});
@@ -149,10 +151,8 @@ app.post('/submit-results', async (req, res) => {
     }
 });
 
-// Admin routes... (no changes needed)
-app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory, isServiceDisabled: isMaintenanceModeEnabled }); });
+app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory, isServiceDisabled: isMaintenanceModeEnabled, workerStatus: workerSocket ? 'Connected' : 'Disconnected', activeJobs: Array.from(workerActiveJobs) }); });
 app.post('/admin/toggle-maintenance', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } isMaintenanceModeEnabled = !isMaintenanceModeEnabled; const message = `Service has been ${isMaintenanceModeEnabled ? 'DISABLED' : 'ENABLED'}.`; console.log(`MAINTENANCE MODE: ${message}`); res.json({ isServiceDisabled: isMaintenanceModeEnabled, message: message }); });
-app.post('/admin/clear-cache', (req, res) => { const { code, query } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } if (query) { searchCache.delete(query.toLowerCase()); console.log(`[ADMIN] Cleared cache for query: "${query}"`); res.status(200).json({ message: `Cache cleared for "${query}".` }); } else { searchCache.clear(); console.log(`[ADMIN] Cleared the entire search cache.`); res.status(200).json({ message: 'Entire search cache has been cleared.' }); } });
-app.post('/admin/system-status', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } res.json({ workerConnected: workerSocket !== null, activeJobs: Array.from(workerActiveJobs), queuedJobs: jobQueue }); });
+app.post('/admin/clear-cache', (req, res) => { const { code, query } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } if (query) { const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { searchCache.delete(cacheKey); console.log(`ADMIN ACTION: Cleared cache for "${query}".`); res.status(200).json({ message: `Cache for "${query}" has been cleared.` }); } else { res.status(404).json({ message: `No cache entry found for "${query}".` }); } } else { searchCache.clear(); console.log("ADMIN ACTION: Full search cache has been cleared."); res.status(200).json({ message: 'Full search cache has been cleared successfully.' }); } });
 
 server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
