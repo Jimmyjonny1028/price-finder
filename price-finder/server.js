@@ -9,14 +9,14 @@ const url = require('url');
 const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
-const pLimit = require('p-limit'); // ### NEW: Import the rate-limiting library ###
+// REMOVED: const pLimit = require('p-limit');
 
 const app = express();
 const PORT = 5000;
 const server = http.createServer(app);
 
-// ### NEW: Create a limiter that allows 2 requests per second (1000ms / 2 = 500ms delay) ###
-const limit = pLimit(2); 
+// ### MODIFIED: Declare 'limit' here, but initialize it inside the async startServer function ###
+let limit;
 
 // Caches and State
 const searchCache = new Map();
@@ -101,7 +101,6 @@ async function fetchImageForQuery(query) {
         return placeholder;
     }
     try {
-        // ### MODIFIED: The API call is now wrapped in the limiter ###
         const response = await limit(() => {
             const url = `https://www.googleapis.com/customsearch/v1`;
             const params = { key: GOOGLE_API_KEY, cx: GOOGLE_CSE_ID, q: query, searchType: 'image', num: 1 };
@@ -182,6 +181,10 @@ app.post('/admin/clear-stats', (req, res) => { const { code } = req.body; if (!c
 
 // Start server
 async function startServer() {
+    // ### MODIFIED: Initialize the p-limit library using a dynamic import ###
+    const pLimitModule = await import('p-limit');
+    limit = pLimitModule.default(2); // Allow 2 requests per second
+
     await loadImageCacheFromFile();
     server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
 }
