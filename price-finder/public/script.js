@@ -15,6 +15,7 @@ const storeFilterPanel = document.getElementById('store-filter-panel');
 const storeFilterList = document.getElementById('store-filter-list');
 const storeSelectAllButton = document.getElementById('store-select-all-button');
 const storeUnselectAllButton = document.getElementById('store-unselect-all-button');
+const themeNotificationEl = document.getElementById('theme-notification'); // ### NEW
 
 // --- Global State ---
 let fullResults = [];
@@ -22,9 +23,9 @@ let availableStores = [];
 let selectedStores = new Set();
 let loadingInterval;
 const loadingMessages = [ "Contacting local scraper...", "Searching Google Shopping & eBay...", "Checking Amazon & other major retailers...", "Analyzing search results...", "Compiling all the deals...", "This may take a minute...", "Almost finished..." ];
-const sessionID = Date.now().toString(36) + Math.random().toString(36).substring(2);
 let currentLocalTheme = 'default';
 let lastSeenRainEvent = 0;
+let notificationTimeout;
 
 // --- Main Event Listeners ---
 searchForm.addEventListener('submit', handleSearch);
@@ -48,12 +49,11 @@ function renderResults(results) { resultsContainer.innerHTML = `<h2>Best Prices 
 // --- "Fun" and Real-time Features ---
 function makeItRain() { const rainContainer = document.body; for (let i = 0; i < 40; i++) { const money = document.createElement('span'); money.textContent = '💰'; money.style.position = 'fixed'; money.style.top = `${Math.random() * -20}vh`; money.style.left = `${Math.random() * 100}vw`; money.style.fontSize = `${Math.random() * 2 + 1}rem`; money.style.zIndex = '9999'; money.style.transition = 'top 2s ease-in, transform 2s ease-in-out'; money.style.pointerEvents = 'none'; rainContainer.appendChild(money); setTimeout(() => { money.style.top = '110vh'; money.style.transform = `rotate(${Math.random() * 720}deg)`; }, 10); setTimeout(() => { money.remove(); }, 2100); } }
 
-// ### NEW: Central polling function for all real-time state ###
 async function pollForLiveState() {
     try {
-        const response = await fetch(`/live_state.json?t=${Date.now()}`); // Cache-busting
+        const response = await fetch(`/live_state.json?t=${Date.now()}`);
+        if (!response.ok) return;
         const data = await response.json();
-
         if (data.theme && data.theme !== currentLocalTheme) {
             applyTheme(data.theme);
         }
@@ -62,36 +62,30 @@ async function pollForLiveState() {
             lastSeenRainEvent = data.rainEventTimestamp;
         }
     } catch (error) {
-        // Fail silently on the client, but log for debugging
         console.error("Live state poll failed:", error);
     }
 }
 
+// ### MODIFIED: Theme application now triggers the notification ###
 function applyTheme(themeName) {
-    console.log(`Applying theme: ${themeName}`);
-    document.body.className = ''; // Clear existing theme classes
+    document.body.classList.remove('theme-default', 'theme-dark', 'theme-retro');
     document.body.classList.add(`theme-${themeName}`);
     currentLocalTheme = themeName;
-}
+    
+    // Show notification
+    const prettyThemeName = themeName.charAt(0).toUpperCase() + themeName.slice(1);
+    themeNotificationEl.innerHTML = `<b>Theme changed to: ${prettyThemeName}</b>`;
+    themeNotificationEl.classList.remove('hidden');
 
-// ### NEW: Heartbeat to register as an online user ###
-async function sendHeartbeat() {
-    try {
-        await fetch('/api/ping', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionID: sessionID })
-        });
-    } catch (error) {
-        console.error('Heartbeat ping failed.', error);
-    }
+    if (notificationTimeout) clearTimeout(notificationTimeout);
+    notificationTimeout = setTimeout(() => {
+        themeNotificationEl.classList.add('hidden');
+    }, 2000);
 }
 
 // Initial calls on page load and set recurring tasks
 pollForLiveState();
-sendHeartbeat();
-setInterval(pollForLiveState, 5000); // Check for global events every 5 seconds
-setInterval(sendHeartbeat, 30000); // Send user-online ping every 30 seconds
+setInterval(pollForLiveState, 5000); 
 
 // --- ADMIN PANEL LOGIC ---
 const adminButton = document.getElementById('admin-button');
@@ -100,7 +94,6 @@ const closeAdminPanel = document.getElementById('close-admin-panel');
 let currentAdminCode = null;
 const totalSearchesEl = document.getElementById('total-searches');
 const uniqueVisitorsEl = document.getElementById('unique-visitors');
-const usersOnlineEl = document.getElementById('users-online');
 const searchHistoryListEl = document.getElementById('search-history-list');
 const maintenanceStatusEl = document.getElementById('maintenance-status');
 const workerStatusEl = document.getElementById('worker-status');
@@ -121,6 +114,7 @@ const clearImageCacheButton = document.getElementById('clear-image-cache-button'
 const clearStatsButton = document.getElementById('clear-stats-button');
 const makeItRainButton = document.getElementById('make-it-rain-button');
 const currentThemeDisplay = document.getElementById('current-theme-display');
+const topSearchesListEl = document.getElementById('top-searches-list'); // ### NEW
 
 adminButton.addEventListener('click', () => { const code = prompt("Please enter the admin code:"); if (code) { fetchAdminData(code); } });
 closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'none'; });
@@ -136,7 +130,22 @@ clearStatsButton.addEventListener('click', () => performAdminAction('/admin/clea
 document.getElementById('theme-controls').addEventListener('click', (event) => { if (event.target.classList.contains('theme-button')) { const theme = event.target.dataset.theme; setTheme(theme); } });
 makeItRainButton.addEventListener('click', () => performAdminAction('/admin/trigger-rain', 'trigger rain'));
 
-async function fetchAdminData(code) { currentAdminCode = code; try { const response = await fetch('/admin/traffic-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }), }); if (!response.ok) { alert('Incorrect code.'); return; } const data = await response.json(); workerStatusEl.textContent = data.workerStatus; workerStatusEl.className = data.workerStatus === 'Connected' ? 'enabled' : 'disabled'; updateQueueStatus(data.isQueuePaused); jobQueueCountEl.textContent = data.jobQueue.length; jobQueueListEl.innerHTML = ''; if (data.jobQueue.length > 0) { data.jobQueue.forEach(job => { const li = document.createElement('li'); li.textContent = `"${job}"`; jobQueueListEl.appendChild(li); }); } else { jobQueueListEl.innerHTML = '<li>Queue is empty.</li>'; } activeJobsCountEl.textContent = data.activeJobs.length; activeJobsListEl.innerHTML = ''; if (data.activeJobs.length > 0) { data.activeJobs.forEach(job => { const li = document.createElement('li'); li.textContent = `"${job}"`; activeJobsListEl.appendChild(li); }); } else { activeJobsListEl.innerHTML = '<li>No active jobs.</li>'; } imageCacheSizeEl.textContent = data.imageCacheSize; updateMaintenanceStatus(data.isServiceDisabled); totalSearchesEl.textContent = data.totalSearches; uniqueVisitorsEl.textContent = data.uniqueVisitors; usersOnlineEl.textContent = data.onlineUsers; searchHistoryListEl.innerHTML = ''; if (data.searchHistory.length > 0) { data.searchHistory.forEach(item => { const li = document.createElement('li'); const timestamp = new Date(item.timestamp).toLocaleString(); li.textContent = `"${item.query}" at ${timestamp}`; searchHistoryListEl.appendChild(li); }); } else { searchHistoryListEl.innerHTML = '<li>No searches recorded yet.</li>'; } currentThemeDisplay.textContent = data.currentTheme.charAt(0).toUpperCase() + data.currentTheme.slice(1); adminPanel.style.display = 'flex'; } catch (error) { console.error("Error fetching admin data:", error); alert("An error occurred while fetching stats."); } }
+async function fetchAdminData(code) { currentAdminCode = code; try { const response = await fetch('/admin/traffic-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }), }); if (!response.ok) { alert('Incorrect code.'); return; } const data = await response.json(); workerStatusEl.textContent = data.workerStatus; workerStatusEl.className = data.workerStatus === 'Connected' ? 'enabled' : 'disabled'; updateQueueStatus(data.isQueuePaused); jobQueueCountEl.textContent = data.jobQueue.length; jobQueueListEl.innerHTML = ''; if (data.jobQueue.length > 0) { data.jobQueue.forEach(job => { const li = document.createElement('li'); li.textContent = `"${job}"`; jobQueueListEl.appendChild(li); }); } else { jobQueueListEl.innerHTML = '<li>Queue is empty.</li>'; } activeJobsCountEl.textContent = data.activeJobs.length; activeJobsListEl.innerHTML = ''; if (data.activeJobs.length > 0) { data.activeJobs.forEach(job => { const li = document.createElement('li'); li.textContent = `"${job}"`; activeJobsListEl.appendChild(li); }); } else { activeJobsListEl.innerHTML = '<li>No active jobs.</li>'; } imageCacheSizeEl.textContent = data.imageCacheSize; updateMaintenanceStatus(data.isServiceDisabled); totalSearchesEl.textContent = data.totalSearches; uniqueVisitorsEl.textContent = data.uniqueVisitors; searchHistoryListEl.innerHTML = ''; if (data.searchHistory.length > 0) { data.searchHistory.forEach(item => { const li = document.createElement('li'); const timestamp = new Date(item.timestamp).toLocaleString(); li.textContent = `"${item.query}" at ${timestamp}`; searchHistoryListEl.appendChild(li); }); } else { searchHistoryListEl.innerHTML = '<li>No searches recorded yet.</li>'; } currentThemeDisplay.textContent = data.currentTheme.charAt(0).toUpperCase() + data.currentTheme.slice(1); 
+        
+        // ### NEW: Display top searches ###
+        topSearchesListEl.innerHTML = '';
+        if (data.topSearches && data.topSearches.length > 0) {
+            data.topSearches.forEach(item => {
+                const li = document.createElement('li');
+                li.textContent = `"${item.term}" (${item.count} times)`;
+                topSearchesListEl.appendChild(li);
+            });
+        } else {
+            topSearchesListEl.innerHTML = '<li>No searches yet.</li>';
+        }
+
+        adminPanel.style.display = 'flex'; 
+    } catch (error) { console.error("Error fetching admin data:", error); alert("An error occurred while fetching stats."); } }
 async function performAdminAction(url, actionName, confirmation = null, body = {}) { if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; } if (confirmation && !confirm(confirmation)) return; try { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, ...body }), }); const data = await response.json(); if (!response.ok) throw new Error(data.message || `Failed to ${actionName}.`); if (data.message) alert(data.message); if (url.includes('set-theme') || url.includes('trigger-rain')) { pollForLiveState(); } fetchAdminData(currentAdminCode); } catch (error) { console.error(`Error during ${actionName}:`, error); alert(`An error occurred: ${error.message}`); } }
 async function setTheme(themeName) { await performAdminAction('/admin/set-theme', 'set theme', null, { theme: themeName }); }
 async function clearCache(isFullClear) { const queryToClear = singleCacheInput.value.trim(); if (!isFullClear && !queryToClear) { alert("Please enter a query to clear."); return; } const confirmation = isFullClear ? "Are you sure you want to clear the entire search cache?" : null; if (confirmation && !confirm(confirmation)) return; try { const response = await fetch('/admin/clear-cache', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, query: isFullClear ? null : queryToClear }), }); const data = await response.json(); if (!response.ok) throw new Error(data.message); alert(data.message); if (!isFullClear) singleCacheInput.value = ''; fetchAdminData(currentAdminCode); } catch (error) { console.error("Error clearing cache:", error); alert(`An error occurred: ${error.message}`); } }
