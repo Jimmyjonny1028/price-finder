@@ -27,22 +27,53 @@
         <p class="disclaimer" style="text-align: center; color: #718096; font-size: 12px; margin-top: 20px;"> All prices are estimated in AUD. Results may include affiliate links. </p>
     </div>
     <button id="admin-button" title="Admin Panel">A</button>
+
+    <!-- MODIFICATION: New Admin Panel Structure -->
     <div id="admin-panel" class="modal-overlay">
         <div class="modal-content">
             <button id="close-admin-panel" class="close-button">×</button>
             <h2>Admin Panel</h2>
-            <div class="maintenance-controls">
+
+            <div class="admin-section">
+                <h4>System Status</h4>
+                <p><strong>Scraper Worker:</strong> <span id="worker-status">UNKNOWN</span></p>
+                <p><strong>Active Jobs (<span id="active-jobs-count">0</span>):</strong></p>
+                <ul id="active-jobs-list" class="status-list"><li>None</li></ul>
+                <p><strong>Queued Jobs (<span id="queued-jobs-count">0</span>):</strong></p>
+                <ul id="queued-jobs-list" class="status-list"><li>None</li></ul>
+            </div>
+
+            <hr>
+
+            <div class="admin-section">
+                <h4>Cache Management</h4>
+                <div class="cache-control">
+                    <input type="text" id="clear-cache-query" placeholder="Enter query to clear...">
+                    <button id="clear-query-button">Clear Query</button>
+                </div>
+                <div class="cache-control">
+                    <button id="clear-all-cache-button">Clear Entire Cache</button>
+                </div>
+            </div>
+            
+            <hr>
+
+            <div class="admin-section maintenance-controls">
                 <h4>Maintenance Mode</h4>
                 <p>Current Status: <strong id="maintenance-status">UNKNOWN</strong></p>
                 <button id="toggle-maintenance-button">Toggle Service</button>
                 <p class="small-text">Disables the search function for all users.</p>
             </div>
+
             <hr>
-            <h3>Traffic Stats</h3>
-            <p><strong>Total Searches:</strong> <span id="total-searches">0</span></p>
-            <p><strong>Unique Visitors:</strong> <span id="unique-visitors">0</span></p>
-            <h3>Recent Searches:</h3>
-            <ul id="search-history-list"></ul>
+
+            <div class="admin-section">
+                <h3>Traffic Stats</h3>
+                <p><strong>Total Searches:</strong> <span id="total-searches">0</span></p>
+                <p><strong>Unique Visitors:</strong> <span id="unique-visitors">0</span></p>
+                <h3>Recent Searches:</h3>
+                <ul id="search-history-list"></ul>
+            </div>
         </div>
     </div>
     <script src="script.js"></script>
