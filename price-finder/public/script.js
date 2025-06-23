@@ -1,4 +1,4 @@
-// public/script.js (FINAL - With New Admin Panel Logic)
+// public/script.js (FINAL)
 
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
@@ -25,32 +25,53 @@ function applyFiltersAndSort() { const sortBy = sortSelect.value; const storeFil
 function populateAndShowControls() { sortSelect.value = 'price-asc'; storeFilterSelect.innerHTML = '<option value="all">All Stores</option>'; conditionFilterSelect.value = 'all'; const stores = [...new Set(fullResults.map(item => item.store))].sort(); stores.forEach(store => { const option = document.createElement('option'); option.value = store; option.textContent = store; storeFilterSelect.appendChild(option); }); controlsContainer.style.display = 'flex'; }
 function renderResults(results) { resultsContainer.innerHTML = `<h2>Best Prices for ${searchInput.value.trim()}</h2>`; if (results.length === 0) { resultsContainer.innerHTML += `<p>No results match the current filters.</p>`; return; } results.forEach(offer => { const card = document.createElement('div'); card.className = 'result-card'; const isLinkValid = offer.url && offer.url !== '#'; const linkAttributes = isLinkValid ? `href="${offer.url}" target="_blank" rel="noopener noreferrer"` : `href="#" class="disabled-link"`; const conditionBadge = offer.condition === 'Refurbished' ? `<span class="condition-badge">Refurbished</span>` : ''; card.innerHTML = ` <div class="result-image"> <img src="${offer.image}" alt="${offer.title}" onerror="this.style.display='none';"> </div> <div class="result-info"> <h3>${offer.title}</h3> <p>Sold by: <strong>${offer.store}</strong> ${conditionBadge}</p> </div> <div class="result-price"> <a ${linkAttributes}> ${offer.price_string} </a> </div> `; resultsContainer.appendChild(card); }); }
 
-// --- MODIFICATION: Updated Admin Panel Logic ---
+// --- ADMIN PANEL LOGIC ---
 const adminButton = document.getElementById('admin-button');
 const adminPanel = document.getElementById('admin-panel');
 const closeAdminPanel = document.getElementById('close-admin-panel');
+let currentAdminCode = null;
+
+// ### NEW: Many more admin elements selected ###
 const totalSearchesEl = document.getElementById('total-searches');
 const uniqueVisitorsEl = document.getElementById('unique-visitors');
 const searchHistoryListEl = document.getElementById('search-history-list');
-const toggleMaintenanceButton = document.getElementById('toggle-maintenance-button');
 const maintenanceStatusEl = document.getElementById('maintenance-status');
-// New element selectors
 const workerStatusEl = document.getElementById('worker-status');
 const activeJobsCountEl = document.getElementById('active-jobs-count');
 const activeJobsListEl = document.getElementById('active-jobs-list');
+const jobQueueCountEl = document.getElementById('job-queue-count');
+const jobQueueListEl = document.getElementById('job-queue-list');
+const queueStatusEl = document.getElementById('queue-status');
+const searchCacheSizeEl = document.getElementById('search-cache-size');
+const imageCacheSizeEl = document.getElementById('image-cache-size');
+
+const toggleMaintenanceButton = document.getElementById('toggle-maintenance-button');
 const clearFullCacheButton = document.getElementById('clear-full-cache-button');
 const singleCacheClearForm = document.getElementById('single-cache-clear-form');
 const singleCacheInput = document.getElementById('single-cache-input');
+const toggleQueueButton = document.getElementById('toggle-queue-button');
+const disconnectWorkerButton = document.getElementById('disconnect-worker-button');
+const clearQueueButton = document.getElementById('clear-queue-button');
+const clearImageCacheButton = document.getElementById('clear-image-cache-button');
+const clearStatsButton = document.getElementById('clear-stats-button');
 
-let currentAdminCode = null;
-
+// Event Listeners
 adminButton.addEventListener('click', () => { const code = prompt("Please enter the admin code:"); if (code) { fetchAdminData(code); } });
 closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'none'; });
 adminPanel.addEventListener('click', (event) => { if (event.target === adminPanel) { adminPanel.style.display = 'none'; } });
 toggleMaintenanceButton.addEventListener('click', toggleMaintenanceMode);
-clearFullCacheButton.addEventListener('click', clearFullCache);
-singleCacheClearForm.addEventListener('submit', clearSingleCache);
+clearFullCacheButton.addEventListener('click', () => clearCache(true));
+singleCacheClearForm.addEventListener('submit', (e) => { e.preventDefault(); clearCache(false); });
 
+// ### NEW: Event listeners for new admin powers ###
+toggleQueueButton.addEventListener('click', toggleQueue);
+disconnectWorkerButton.addEventListener('click', disconnectWorker);
+clearQueueButton.addEventListener('click', clearQueue);
+clearImageCacheButton.addEventListener('click', clearImageCache);
+clearStatsButton.addEventListener('click', clearStats);
+
+
+// ### MODIFIED: fetchAdminData now updates all the new UI elements ###
 async function fetchAdminData(code) {
     currentAdminCode = code;
     try {
@@ -58,14 +79,25 @@ async function fetchAdminData(code) {
         if (!response.ok) { alert('Incorrect code.'); return; }
         const data = await response.json();
         
-        // Populate all data fields
-        totalSearchesEl.textContent = data.totalSearches;
-        uniqueVisitorsEl.textContent = data.uniqueVisitors;
-        updateMaintenanceStatus(data.isServiceDisabled);
-        
-        // New live status data
+        // Status Section
         workerStatusEl.textContent = data.workerStatus;
         workerStatusEl.className = data.workerStatus === 'Connected' ? 'enabled' : 'disabled';
+        updateQueueStatus(data.isQueuePaused);
+        
+        // Job Queue Section
+        jobQueueCountEl.textContent = data.jobQueue.length;
+        jobQueueListEl.innerHTML = '';
+        if (data.jobQueue.length > 0) {
+            data.jobQueue.forEach(job => {
+                const li = document.createElement('li');
+                li.textContent = `"${job}"`;
+                jobQueueListEl.appendChild(li);
+            });
+        } else {
+            jobQueueListEl.innerHTML = '<li>Queue is empty.</li>';
+        }
+
+        // Active Jobs Section
         activeJobsCountEl.textContent = data.activeJobs.length;
         activeJobsListEl.innerHTML = '';
         if (data.activeJobs.length > 0) {
@@ -77,9 +109,20 @@ async function fetchAdminData(code) {
         } else {
             activeJobsListEl.innerHTML = '<li>No active jobs.</li>';
         }
+        
+        // Cache Section
+        // Note: We don't get the full search cache content, just its size for performance.
+        searchCacheSizeEl.textContent = 'N/A'; // Need a new endpoint if we want this live
+        imageCacheSizeEl.textContent = data.imageCacheSize;
 
+        // System Control Section
+        updateMaintenanceStatus(data.isServiceDisabled);
+        
+        // Traffic Stats Section
+        totalSearchesEl.textContent = data.totalSearches;
+        uniqueVisitorsEl.textContent = data.uniqueVisitors;
         searchHistoryListEl.innerHTML = '';
-        if(data.searchHistory.length > 0) {
+        if (data.searchHistory.length > 0) {
             data.searchHistory.forEach(item => {
                 const li = document.createElement('li');
                 const timestamp = new Date(item.timestamp).toLocaleString();
@@ -97,36 +140,81 @@ async function fetchAdminData(code) {
     }
 }
 
-async function toggleMaintenanceMode() { if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; } try { const response = await fetch('/admin/toggle-maintenance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode }), }); if (!response.ok) { throw new Error("Failed to toggle maintenance mode."); } const data = await response.json(); updateMaintenanceStatus(data.isServiceDisabled); alert(data.message); } catch (error) { console.error("Error toggling maintenance mode:", error); alert("An error occurred."); } }
-function updateMaintenanceStatus(isDisabled) { if (isDisabled) { maintenanceStatusEl.textContent = 'DISABLED'; maintenanceStatusEl.className = 'disabled'; } else { maintenanceStatusEl.textContent = 'ENABLED'; maintenanceStatusEl.className = 'enabled'; } }
+// ### NEW: Functions for all the new admin powers ###
+async function performAdminAction(url, actionName, confirmation = null) {
+    if (!currentAdminCode) {
+        alert("Please open the admin panel with a valid code first.");
+        return;
+    }
+    if (confirmation && !confirm(confirmation)) return;
 
-async function clearFullCache() {
-    if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; }
-    if (!confirm("Are you sure you want to clear the entire search cache?")) return;
     try {
-        const response = await fetch('/admin/clear-cache', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode }), });
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: currentAdminCode }),
+        });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error);
+        if (!response.ok) throw new Error(data.message || `Failed to ${actionName}.`);
         alert(data.message);
+        fetchAdminData(currentAdminCode); // Refresh data after action
     } catch (error) {
-        console.error("Error clearing full cache:", error);
+        console.error(`Error during ${actionName}:`, error);
         alert(`An error occurred: ${error.message}`);
     }
 }
 
-async function clearSingleCache(event) {
-    event.preventDefault();
-    if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; }
+function toggleMaintenanceMode() { performAdminAction('/admin/toggle-maintenance', 'toggle maintenance'); }
+function toggleQueue() { performAdminAction('/admin/toggle-queue', 'toggle queue'); }
+function disconnectWorker() { performAdminAction('/admin/disconnect-worker', 'disconnect worker', 'Are you sure you want to disconnect the worker?'); }
+function clearQueue() { performAdminAction('/admin/clear-queue', 'clear queue', 'Are you sure you want to clear the entire job queue?'); }
+function clearImageCache() { performAdminAction('/admin/clear-image-cache', 'clear image cache', 'Are you sure you want to clear the permanent image cache?'); }
+function clearStats() { performAdminAction('/admin/clear-stats', 'clear stats', 'Are you sure you want to clear ALL traffic stats and search history?'); }
+
+async function clearCache(isFullClear) {
     const queryToClear = singleCacheInput.value.trim();
-    if (!queryToClear) { alert("Please enter a search query to clear."); return; }
+    if (!isFullClear && !queryToClear) {
+        alert("Please enter a query to clear.");
+        return;
+    }
+    const confirmation = isFullClear ? "Are you sure you want to clear the entire search cache?" : null;
+
+    if (confirmation && !confirm(confirmation)) return;
+    
     try {
-        const response = await fetch('/admin/clear-single-cache', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, query: queryToClear }), });
+        const response = await fetch('/admin/clear-cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: currentAdminCode, query: isFullClear ? null : queryToClear }),
+        });
         const data = await response.json();
         if (!response.ok) throw new Error(data.message);
         alert(data.message);
-        singleCacheInput.value = '';
+        if (!isFullClear) singleCacheInput.value = '';
+        fetchAdminData(currentAdminCode); // Refresh data
     } catch (error) {
-        console.error("Error clearing single cache:", error);
+        console.error("Error clearing cache:", error);
         alert(`An error occurred: ${error.message}`);
+    }
+}
+
+// ### NEW: Helper functions to update status colors/text ###
+function updateMaintenanceStatus(isDisabled) {
+    if (isDisabled) {
+        maintenanceStatusEl.textContent = 'DISABLED';
+        maintenanceStatusEl.className = 'disabled';
+    } else {
+        maintenanceStatusEl.textContent = 'ENABLED';
+        maintenanceStatusEl.className = 'enabled';
+    }
+}
+
+function updateQueueStatus(isPaused) {
+    if (isPaused) {
+        queueStatusEl.textContent = 'PAUSED';
+        queueStatusEl.className = 'disabled';
+    } else {
+        queueStatusEl.textContent = 'RUNNING';
+        queueStatusEl.className = 'enabled';
     }
 }
