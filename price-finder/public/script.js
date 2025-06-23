@@ -1,4 +1,4 @@
-// public/script.js (FINAL - With Silent Polling)
+// public/script.js (FINAL - Silent Polling Version)
 
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
@@ -12,7 +12,7 @@ const storeFilterSelect = document.getElementById('store-filter-select');
 const conditionFilterSelect = document.getElementById('condition-filter-select');
 let fullResults = [];
 let loadingInterval;
-const loadingMessages = [ "Sending request to your personal scraper...", "Searching Google Shopping & eBay...", "Checking Amazon & other major retailers...", "Analyzing search results...", "Compiling all the deals...", "This may take a minute...", "Almost finished..." ];
+const loadingMessages = [ "Contacting local scraper...", "Searching Google Shopping & eBay...", "Checking Amazon & other major retailers...", "Analyzing search results...", "Compiling all the deals...", "This may take a minute...", "Almost finished..." ];
 
 searchForm.addEventListener('submit', handleSearch);
 sortSelect.addEventListener('change', applyFiltersAndSort);
@@ -30,7 +30,6 @@ async function handleSearch(event) {
     loaderText.textContent = loadingMessages[messageIndex];
     loader.classList.remove('hidden');
     loader.classList.remove('polling');
-    // The loading message will now cycle continuously until results are found.
     loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000);
     try {
         const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`);
@@ -41,7 +40,7 @@ async function handleSearch(event) {
         }
         const results = await response.json();
         if (results.length > 0) { fullResults = results; populateAndShowControls(); applyFiltersAndSort(); }
-        else { resultsContainer.innerHTML = `<p>No cached results found. Please ensure your local scraper is running and try again.</p>`; }
+        else { resultsContainer.innerHTML = `<p>No cached results found.</p>`; }
     } catch (error) { console.error("Failed to fetch data:", error); resultsContainer.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`;
     } finally { if (!loader.classList.contains('polling')) { searchButton.disabled = false; loader.classList.add('hidden'); clearInterval(loadingInterval); } }
 }
@@ -52,13 +51,10 @@ function pollForResults(query, attempt = 1) {
     
     fetch(`/results/${encodeURIComponent(query)}`)
         .then(res => {
-            if (res.status === 200) { return res.json(); } // Success
-            
-            // MODIFICATION: Simplified logic for "Still working"
+            if (res.status === 200) return res.json();
             if (res.status === 202) {
-                console.log(`Attempt ${attempt}: Results not ready, checking again in ${interval}ms.`); 
                 setTimeout(() => pollForResults(query, attempt + 1), interval);
-                return null; // Stop the promise chain
+                return null;
             }
             throw new Error('Server returned an error during polling.');
         })
