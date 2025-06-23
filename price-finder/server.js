@@ -68,33 +68,40 @@ const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); 
 const extractColorFromTitle = (title) => { const titleLower = title.toLowerCase(); for (const color of COLOR_LIST) { if (titleLower.includes(color)) return color; } return null; };
 function parsePythonResults(results) { return results.map(item => { const price = item.price_string ? parseFloat(item.price_string.replace(/[^0-9.]/g, '')) : null; if (!price || !item.store || !item.title) return null; return { title: item.title, price: price, price_string: item.price_string, store: item.store, url: item.url || '#' }; }).filter(Boolean); }
 function parsePriceApiResults(downloadedJobs) { let allResults = []; for (const jobData of downloadedJobs) { if (!jobData || !jobData.results || jobData.results.length === 0) continue; const sourceName = jobData.source || 'API Source'; const topic = jobData.topic; const jobResult = jobData.results[0]; let mapped = []; if (topic === 'product_and_offers' && jobResult.content) { const content = jobResult.content; const offer = content.buybox; if (content.name && offer && offer.min_price) { mapped.push({ title: content.name, price: parseFloat(offer.min_price), price_string: offer.min_price ? `$${parseFloat(offer.min_price).toFixed(2)}` : 'N/A', url: content.url, image: content.image_url, store: offer.shop_name || sourceName }); } } else if (topic === 'search_results' && jobResult.content?.search_results) { const searchResults = jobResult.content.search_results; mapped = searchResults.map(item => { let price = null; let price_string = 'N/A'; if (item.price) { price = parseFloat(item.price); price_string = item.price_string || `$${parseFloat(item.price).toFixed(2)}`; } else if (item.min_price) { price = parseFloat(item.min_price); price_string = `From $${price.toFixed(2)}`; } if (item.name && price !== null) { return { title: item.name, price: price, price_string: price_string, url: item.url, image: item.img_url, store: item.shop_name || sourceName }; } return null; }).filter(Boolean); } allResults = allResults.concat(mapped); } return allResults; }
-function filterPriceOutliers(results) { if (results.length < 5) return results; const sortedResults = [...results].sort((a, b) => a.price - b.price); let cutOffIndex = 0; const GAP_MULTIPLIER = 2.5; const MIN_PRICE_FOR_JUMP = 100; for (let i = 0; i < sortedResults.length - 1; i++) { const currentPrice = sortedResults[i].price; const nextPrice = sortedResults[i+1].price; if (nextPrice > currentPrice * GAP_MULTIPLIER && nextPrice > MIN_PRICE_FOR_JUMP) { cutOffIndex = i + 1; } } if (cutOffIndex > 0) { console.log(`[Price Outlier Filter] Discarding ${cutOffIndex} items cheaper than the main product cluster.`); return sortedResults.slice(cutOffIndex); } return sortedResults; }
-
-// ### NEW: This is the single, definitive filtering function now ###
-function filterAndRankResults(results, query) {
-    const queryLower = query.toLowerCase();
-    const queryWords = queryLower.split(' ').filter(w => w.length > 2 && isNaN(w)); // Get significant words
-    if (queryWords.length === 0) return results; // Can't filter if query is too generic
-
-    const requiredScore = queryWords.length > 1 ? 2 : 1; // Require at least 2 words to match if possible
-
-    const filtered = results.filter(item => {
-        const titleLower = item.title.toLowerCase();
-        let score = 0;
-        queryWords.forEach(word => {
-            if (titleLower.includes(word)) {
-                score++;
-            }
-        });
-        return score >= requiredScore;
-    });
-    console.log(`[Relevance Filter] Kept ${filtered.length}/${results.length} results that matched at least ${requiredScore} query terms.`);
-    return filtered;
-}
-
-async function searchPriceApiCom(query) { try { const negative_keywords = ['case', 'protector', 'strap', 'charger', 'band', 'replacement']; const jobsToSubmit = [ { source: 'amazon', country: 'au', topic: 'product_and_offers', key: 'term', values: query }, { source: 'ebay', country: 'au', topic: 'search_results', key: 'term', values: query, condition: 'any' }, { source: 'google_shopping', country: 'au', topic: 'search_results', key: 'term', values: query, condition: 'any', negative_keywords: negative_keywords.join(',') } ]; const jobPromises = jobsToSubmit.map(job => axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, ...job }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message); return null; }) ); const jobResponses = (await Promise.all(jobPromises)).filter(Boolean); if (jobResponses.length === 0) return []; console.log(`[Backup API] Created ${jobResponses.length} jobs for "${query}". Waiting 15s...`); await wait(15000); const resultPromises = jobResponses.map(job => axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to fetch results for job ID ${job.job_id}`, err.response?.data?.message || err.message); return null; }) ); return (await Promise.all(resultPromises)).filter(Boolean); } catch (err) { console.error("A critical error occurred in the searchPriceApiCom function:", err.message); return []; } }
+async function searchPriceApiCom(query) { try { const negative_keywords = ['case', 'protector', 'strap', 'charger', 'band', 'replacement', 'film', 'glass', 'cover']; const jobsToSubmit = [ { source: 'amazon', country: 'au', topic: 'product_and_offers', key: 'term', values: query }, { source: 'ebay', country: 'au', topic: 'search_results', key: 'term', values: query, condition: 'any' }, { source: 'google_shopping', country: 'au', topic: 'search_results', key: 'term', values: query, condition: 'any', negative_keywords: negative_keywords.join(',') } ]; const jobPromises = jobsToSubmit.map(job => axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, ...job }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message); return null; }) ); const jobResponses = (await Promise.all(jobPromises)).filter(Boolean); if (jobResponses.length === 0) return []; console.log(`[Backup API] Created ${jobResponses.length} jobs for "${query}". Waiting 15s...`); await wait(15000); const resultPromises = jobResponses.map(job => axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to fetch results for job ID ${job.job_id}`, err.response?.data?.message || err.message); return null; }) ); return (await Promise.all(resultPromises)).filter(Boolean); } catch (err) { console.error("A critical error occurred in the searchPriceApiCom function:", err.message); return []; } }
 async function fetchImageForQuery(query) { const cacheKey = query.toLowerCase(); if (imageCache.has(cacheKey)) { return imageCache.get(cacheKey); } const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A'; if (!GOOGLE_API_KEY || !GOOGLE_CSE_ID) { return placeholder; } try { const response = await limit(() => { const url = `https://www.googleapis.com/customsearch/v1`; const params = { key: GOOGLE_API_KEY, cx: GOOGLE_CSE_ID, q: query, searchType: 'image', num: 1 }; return axios.get(url, { params }); }); const imageUrl = response.data.items?.[0]?.link || placeholder; imageCache.set(cacheKey, imageUrl); await saveImageCacheToFile(); return imageUrl; } catch (error) { console.error(`[FATAL] Google Image Search request failed for query: "${query}"`); if (error.response) { console.error('Error Data:', JSON.stringify(error.response.data, null, 2)); } else { console.error('Error Message:', error.message); } return placeholder; } }
 async function enrichResultsWithImages(results, baseQuery) { if (results.length === 0) return results; const defaultImageUrl = await fetchImageForQuery(baseQuery); const uniqueColors = new Set(results.map(result => extractColorFromTitle(result.title)).filter(Boolean)); const colorsToFetch = Array.from(uniqueColors).slice(0, 2); const colorImageMap = new Map(); if (colorsToFetch.length > 0) { console.log(`Enriching with up to 2 extra color-specific images for: ${colorsToFetch.join(', ')}`); } await Promise.all(colorsToFetch.map(async (color) => { const specificQuery = `${baseQuery} ${color}`; const imageUrl = await fetchImageForQuery(specificQuery); colorImageMap.set(color, imageUrl); })); results.forEach(result => { const color = extractColorFromTitle(result.title); result.image = colorImageMap.get(color) || defaultImageUrl; }); return results; }
+
+// ### NEW: The Price Cluster Analysis function ###
+function findPriceCluster(results) {
+    if (results.length < 3) return results; // Not enough data to find a cluster
+
+    const sortedResults = [...results].sort((a, b) => a.price - b.price);
+    
+    let bestCluster = [];
+    
+    for (let i = 0; i < sortedResults.length; i++) {
+        let currentCluster = [sortedResults[i]];
+        for (let j = i + 1; j < sortedResults.length; j++) {
+            // Check if the next price is within 25% of the current price in the cluster
+            if (sortedResults[j].price <= currentCluster[currentCluster.length - 1].price * 1.25) {
+                currentCluster.push(sortedResults[j]);
+            } else {
+                break; // Gap is too large, cluster ends
+            }
+        }
+        if (currentCluster.length > bestCluster.length) {
+            bestCluster = currentCluster;
+        }
+    }
+    
+    if (bestCluster.length > 0) {
+        const avgPrice = bestCluster.reduce((sum, item) => sum + item.price, 0) / bestCluster.length;
+        console.log(`[Cluster Analysis] Found a cluster of ${bestCluster.length} items with an average price of $${avgPrice.toFixed(2)}.`);
+    }
+
+    return bestCluster;
+}
 
 app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } const normalizedQuery = query.toLowerCase().trim(); if (normalizedQuery) { const currentCount = searchTermFrequency.get(normalizedQuery) || 0; searchTermFrequency.set(normalizedQuery, currentCount + 1); } } catch (e) { console.error("Error logging traffic:", e); } const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData.results); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
 app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey).results); } else { return res.status(202).send(); }});
@@ -112,44 +119,44 @@ app.post('/submit-results', async (req, res) => {
 
     if (allScraperResults.length > 0) {
         if (isComponentOrAccessory) {
-            finalResults = filterAndRankResults(allScraperResults, query);
+            // For components, we don't need complex clustering, just relevance.
+            finalResults = allScraperResults; 
         } else {
-            const maxPrice = Math.max(...allScraperResults.map(item => item.price));
-            if (maxPrice < MAIN_PRODUCT_PRICE_THRESHOLD) {
-                console.log(`[Fallback Trigger] Main product search for "${query}" only found cheap items (max price: $${maxPrice.toFixed(2)}).`);
-                triggerFallback = true;
+            // For main products, use the new cluster analysis.
+            const mainCluster = findPriceCluster(allScraperResults);
+            const clusterAvgPrice = mainCluster.length > 0 ? mainCluster.reduce((sum, item) => sum + item.price, 0) / mainCluster.length : 0;
+
+            if (mainCluster.length >= 2 && clusterAvgPrice > MAIN_PRODUCT_PRICE_THRESHOLD) {
+                // We found a valid, high-value cluster. Trust these results.
+                console.log(`[Filter Decision] Valid product cluster found. Using ${mainCluster.length} scraper results.`);
+                finalResults = mainCluster;
             } else {
-                const priceFiltered = filterPriceOutliers(allScraperResults);
-                finalResults = filterAndRankResults(priceFiltered, query);
+                // No valid cluster found, distrust all scraper results and trigger fallback.
+                console.log(`[Fallback Trigger] No valid product cluster found. Triggering backup API.`);
+                triggerFallback = true;
             }
         }
-    }
-
-    if (finalResults.length === 0 && !triggerFallback) {
-        console.log(`[Fallback Trigger] Scraper results for "${query}" were all filtered out.`);
-        triggerFallback = true;
+    } else {
+        triggerFallback = true; // No results from scraper at all.
     }
 
     if (triggerFallback) {
         console.log(`[Fallback] Running backup API for "${query}".`);
         try {
             const downloadedJobs = await searchPriceApiCom(query);
-            let allApiResults = parsePriceApiResults(downloadedJobs);
-            let finalApiResults = filterAndRankResults(allApiResults, query); // Use the same robust filter here
-
-            const resultsWithImages = await enrichResultsWithImages(finalApiResults, query);
-            const sortedResults = resultsWithImages.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) }));
-            searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
+            const allApiResults = parsePriceApiResults(downloadedJobs);
+            finalResults = allApiResults; // Use API results directly, assuming they are better filtered.
         } catch (error) {
             console.error(`[Backup API] A critical error occurred during the fallback for "${query}":`, error);
-            searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
+            finalResults = [];
         }
-    } else {
-        const resultsWithImages = await enrichResultsWithImages(finalResults, query);
-        const sortedResults = resultsWithImages.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) }));
-        searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
     }
+
+    const resultsWithImages = await enrichResultsWithImages(finalResults, query);
+    const sortedResults = resultsWithImages.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) }));
+    searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
 });
+
 
 app.post('/api/ping', (req, res) => { const { sessionID } = req.body; if (!sessionID) return res.status(400).send(); if (onlineUserTimeouts.has(sessionID)) { clearTimeout(onlineUserTimeouts.get(sessionID)); } const timeoutID = setTimeout(() => { onlineUserTimeouts.delete(sessionID); updateLiveStateFile(); }, USER_ONLINE_TIMEOUT_MS); onlineUserTimeouts.set(sessionID, timeoutID); updateLiveStateFile(); res.status(200).json({ status: 'ok' }); });
 app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const topSearches = [...searchTermFrequency.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([term, count]) => ({ term, count })); res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory, isServiceDisabled: isMaintenanceModeEnabled, workerStatus: workerSocket ? 'Connected' : 'Disconnected', activeJobs: Array.from(workerActiveJobs), jobQueue: jobQueue, isQueuePaused: isQueueProcessingPaused, imageCacheSize: imageCache.size, currentTheme: liveState.theme, onlineUsers: liveState.onlineUsers, topSearches: topSearches }); });
