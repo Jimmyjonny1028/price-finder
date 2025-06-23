@@ -22,7 +22,9 @@ let availableStores = [];
 let selectedStores = new Set();
 let loadingInterval;
 const loadingMessages = [ "Contacting local scraper...", "Searching Google Shopping & eBay...", "Checking Amazon & other major retailers...", "Analyzing search results...", "Compiling all the deals...", "This may take a minute...", "Almost finished..." ];
-const sessionID = Date.now().toString(36) + Math.random().toString(36).substring(2); // ### NEW: Unique ID for this browser session
+const sessionID = Date.now().toString(36) + Math.random().toString(36).substring(2);
+let currentLocalTheme = 'default';
+let lastSeenRainEvent = 0;
 
 // --- Main Event Listeners ---
 searchForm.addEventListener('submit', handleSearch);
@@ -43,32 +45,41 @@ function updateStoreFilterButtonText() { if (selectedStores.size === availableSt
 function updateAllCheckboxes(checked) { document.querySelectorAll('#store-filter-list input[type="checkbox"]').forEach(cb => { cb.checked = checked; if (checked) { selectedStores.add(cb.dataset.store); } else { selectedStores.clear(); } }); updateStoreFilterButtonText(); applyFiltersAndSort(); }
 function renderResults(results) { resultsContainer.innerHTML = `<h2>Best Prices for ${searchInput.value.trim()}</h2>`; if (results.length === 0) { resultsContainer.innerHTML += `<p>No results match the current filters.</p>`; return; } results.forEach(offer => { const card = document.createElement('div'); card.className = 'result-card'; const isLinkValid = offer.url && offer.url !== '#'; const linkAttributes = isLinkValid ? `href="${offer.url}" target="_blank" rel="noopener noreferrer"` : `href="#" class="disabled-link"`; const conditionBadge = offer.condition === 'Refurbished' ? `<span class="condition-badge">Refurbished</span>` : ''; card.innerHTML = ` <div class="result-image"> <img src="${offer.image}" alt="${offer.title}" onerror="this.style.display='none';"> </div> <div class="result-info"> <h3>${offer.title}</h3> <p>Sold by: <strong>${offer.store}</strong> ${conditionBadge}</p> </div> <div class="result-price"> <a ${linkAttributes}> ${offer.price_string} </a> </div> `; resultsContainer.appendChild(card); }); }
 
-// --- "Fun" and Utility Features ---
+// --- "Fun" and Real-time Features ---
 function makeItRain() { const rainContainer = document.body; for (let i = 0; i < 40; i++) { const money = document.createElement('span'); money.textContent = '💰'; money.style.position = 'fixed'; money.style.top = `${Math.random() * -20}vh`; money.style.left = `${Math.random() * 100}vw`; money.style.fontSize = `${Math.random() * 2 + 1}rem`; money.style.zIndex = '9999'; money.style.transition = 'top 2s ease-in, transform 2s ease-in-out'; money.style.pointerEvents = 'none'; rainContainer.appendChild(money); setTimeout(() => { money.style.top = '110vh'; money.style.transform = `rotate(${Math.random() * 720}deg)`; }, 10); setTimeout(() => { money.remove(); }, 2100); } }
 
-// ### NEW: Heartbeat function to keep user session alive ###
+// ### MODIFIED: This single heartbeat function now handles all real-time updates ###
 async function sendHeartbeat() {
     try {
-        await fetch('/api/ping', {
+        const response = await fetch('/api/ping', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionID: sessionID })
         });
+        const data = await response.json();
+
+        // 1. Handle Theme Changes
+        if (data.theme && data.theme !== currentLocalTheme) {
+            console.log(`Applying new global theme: ${data.theme}`);
+            document.body.className = `theme-${data.theme}`;
+            currentLocalTheme = data.theme;
+        }
+
+        // 2. Handle "Make It Rain" Event
+        if (data.rainEventTimestamp && data.rainEventTimestamp > lastSeenRainEvent) {
+            console.log("New 'Make It Rain' event detected! 🎉");
+            makeItRain();
+            lastSeenRainEvent = data.rainEventTimestamp; // Remember we've seen this event
+        }
+
     } catch (error) {
-        // We don't need to show an error if a ping fails
         console.error('Heartbeat failed.', error);
     }
 }
 
-let currentLocalTheme = 'default';
-async function pollForThemeChanges() { try { const response = await fetch('/api/get-theme'); const data = await response.json(); if (data.theme && data.theme !== currentLocalTheme) { console.log(`Applying new global theme: ${data.theme}`); document.body.className = `theme-${data.theme}`; currentLocalTheme = data.theme; } } catch (error) { console.error('Failed to poll for theme:', error); } }
-
-// Initial calls on page load
+// Initial calls on page load and set recurring heartbeat
 sendHeartbeat();
-pollForThemeChanges();
-// Set up recurring tasks
-setInterval(sendHeartbeat, 30000); // Send a ping every 30 seconds
-setInterval(pollForThemeChanges, 20000); 
+setInterval(sendHeartbeat, 30000); // Send a ping/check for updates every 30 seconds
 
 
 // --- ADMIN PANEL LOGIC ---
@@ -78,7 +89,7 @@ const closeAdminPanel = document.getElementById('close-admin-panel');
 let currentAdminCode = null;
 const totalSearchesEl = document.getElementById('total-searches');
 const uniqueVisitorsEl = document.getElementById('unique-visitors');
-const usersOnlineEl = document.getElementById('users-online'); // ### NEW: Select the online users element
+const usersOnlineEl = document.getElementById('users-online');
 const searchHistoryListEl = document.getElementById('search-history-list');
 const maintenanceStatusEl = document.getElementById('maintenance-status');
 const workerStatusEl = document.getElementById('worker-status');
@@ -111,12 +122,14 @@ disconnectWorkerButton.addEventListener('click', () => performAdminAction('/admi
 clearQueueButton.addEventListener('click', () => performAdminAction('/admin/clear-queue', 'clear queue', 'Are you sure you want to clear the entire job queue?'));
 clearImageCacheButton.addEventListener('click', () => performAdminAction('/admin/clear-image-cache', 'clear image cache', 'Are you sure you want to clear the permanent image cache?'));
 clearStatsButton.addEventListener('click', () => performAdminAction('/admin/clear-stats', 'clear stats', 'Are you sure you want to clear ALL traffic stats and search history?'));
-makeItRainButton.addEventListener('click', makeItRain);
 document.getElementById('theme-controls').addEventListener('click', (event) => { if (event.target.classList.contains('theme-button')) { const theme = event.target.dataset.theme; setTheme(theme); } });
+// ### MODIFIED: Make it rain now calls the global trigger endpoint ###
+makeItRainButton.addEventListener('click', () => performAdminAction('/admin/trigger-rain', 'trigger rain'));
+
 
 async function fetchAdminData(code) { currentAdminCode = code; try { const response = await fetch('/admin/traffic-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }), }); if (!response.ok) { alert('Incorrect code.'); return; } const data = await response.json(); workerStatusEl.textContent = data.workerStatus; workerStatusEl.className = data.workerStatus === 'Connected' ? 'enabled' : 'disabled'; updateQueueStatus(data.isQueuePaused); jobQueueCountEl.textContent = data.jobQueue.length; jobQueueListEl.innerHTML = ''; if (data.jobQueue.length > 0) { data.jobQueue.forEach(job => { const li = document.createElement('li'); li.textContent = `"${job}"`; jobQueueListEl.appendChild(li); }); } else { jobQueueListEl.innerHTML = '<li>Queue is empty.</li>'; } activeJobsCountEl.textContent = data.activeJobs.length; activeJobsListEl.innerHTML = ''; if (data.activeJobs.length > 0) { data.activeJobs.forEach(job => { const li = document.createElement('li'); li.textContent = `"${job}"`; activeJobsListEl.appendChild(li); }); } else { activeJobsListEl.innerHTML = '<li>No active jobs.</li>'; } imageCacheSizeEl.textContent = data.imageCacheSize; updateMaintenanceStatus(data.isServiceDisabled); totalSearchesEl.textContent = data.totalSearches; uniqueVisitorsEl.textContent = data.uniqueVisitors; usersOnlineEl.textContent = data.onlineUsers; searchHistoryListEl.innerHTML = ''; if (data.searchHistory.length > 0) { data.searchHistory.forEach(item => { const li = document.createElement('li'); const timestamp = new Date(item.timestamp).toLocaleString(); li.textContent = `"${item.query}" at ${timestamp}`; searchHistoryListEl.appendChild(li); }); } else { searchHistoryListEl.innerHTML = '<li>No searches recorded yet.</li>'; } currentThemeDisplay.textContent = data.currentTheme.charAt(0).toUpperCase() + data.currentTheme.slice(1); adminPanel.style.display = 'flex'; } catch (error) { console.error("Error fetching admin data:", error); alert("An error occurred while fetching stats."); } }
-async function performAdminAction(url, actionName, confirmation = null, body = {}) { if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; } if (confirmation && !confirm(confirmation)) return; try { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, ...body }), }); const data = await response.json(); if (!response.ok) throw new Error(data.message || `Failed to ${actionName}.`); alert(data.message); fetchAdminData(currentAdminCode); } catch (error) { console.error(`Error during ${actionName}:`, error); alert(`An error occurred: ${error.message}`); } }
-async function setTheme(themeName) { await performAdminAction('/admin/set-theme', 'set theme', null, { theme: themeName }); pollForThemeChanges(); }
+async function performAdminAction(url, actionName, confirmation = null, body = {}) { if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; } if (confirmation && !confirm(confirmation)) return; try { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, ...body }), }); const data = await response.json(); if (!response.ok) throw new Error(data.message || `Failed to ${actionName}.`); if (data.message) alert(data.message); fetchAdminData(currentAdminCode); } catch (error) { console.error(`Error during ${actionName}:`, error); alert(`An error occurred: ${error.message}`); } }
+async function setTheme(themeName) { await performAdminAction('/admin/set-theme', 'set theme', null, { theme: themeName }); sendHeartbeat(); }
 async function clearCache(isFullClear) { const queryToClear = singleCacheInput.value.trim(); if (!isFullClear && !queryToClear) { alert("Please enter a query to clear."); return; } const confirmation = isFullClear ? "Are you sure you want to clear the entire search cache?" : null; if (confirmation && !confirm(confirmation)) return; try { const response = await fetch('/admin/clear-cache', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, query: isFullClear ? null : queryToClear }), }); const data = await response.json(); if (!response.ok) throw new Error(data.message); alert(data.message); if (!isFullClear) singleCacheInput.value = ''; fetchAdminData(currentAdminCode); } catch (error) { console.error("Error clearing cache:", error); alert(`An error occurred: ${error.message}`); } }
 function updateMaintenanceStatus(isDisabled) { if (isDisabled) { maintenanceStatusEl.textContent = 'DISABLED'; maintenanceStatusEl.className = 'disabled'; } else { maintenanceStatusEl.textContent = 'ENABLED'; maintenanceStatusEl.className = 'enabled'; } }
 function updateQueueStatus(isPaused) { if (isPaused) { queueStatusEl.textContent = 'PAUSED'; queueStatusEl.className = 'disabled'; } else { queueStatusEl.textContent = 'RUNNING'; queueStatusEl.className = 'enabled'; } }
