@@ -14,7 +14,7 @@
         <h1>Smart Price Finder</h1>
         <p class="subtitle">Your personal PC-powered web scraper.</p>
         <form id="search-form">
-            <input type="text" id="search-input" placeholder="e.g., Google Pixel 9" required>
+            <input type="text" id="search-input" placeholder="e.g., iPhone 16 Pro Max" required>
             <button type="submit" id="search-button">Search</button>
         </form>
         <div class="controls-container" id="controls-container" style="display: none;">
@@ -22,57 +22,70 @@
             <div class="control-group"> <label for="condition-filter-select">Condition:</label> <select id="condition-filter-select"> <option value="all">All Conditions</option> <option value="new">New Only</option> <option value="refurbished">Refurbished Only</option> </select> </div>
             <div class="control-group"> <label for="store-filter-select">Store:</label> <select id="store-filter-select"> <option value="all">All Stores</option> </select> </div>
         </div>
-        <div id="loader" class="hidden"> <div class="spinner"></div> <p>Sending job to your PC...</p> </div>
+        <div id="loader" class="hidden"> <div class="spinner"></div> <p>Contacting local scraper...</p> </div>
         <div id="results-container"></div>
         <p class="disclaimer" style="text-align: center; color: #718096; font-size: 12px; margin-top: 20px;"> All prices are estimated in AUD. Results may include affiliate links. </p>
     </div>
     <button id="admin-button" title="Admin Panel">A</button>
 
-    <!-- MODIFICATION: New Admin Panel Structure -->
     <div id="admin-panel" class="modal-overlay">
         <div class="modal-content">
             <button id="close-admin-panel" class="close-button">×</button>
             <h2>Admin Panel</h2>
 
             <div class="admin-section">
-                <h4>System Status</h4>
-                <p><strong>Scraper Worker:</strong> <span id="worker-status">UNKNOWN</span></p>
-                <p><strong>Active Jobs (<span id="active-jobs-count">0</span>):</strong></p>
-                <ul id="active-jobs-list" class="status-list"><li>None</li></ul>
-                <p><strong>Queued Jobs (<span id="queued-jobs-count">0</span>):</strong></p>
-                <ul id="queued-jobs-list" class="status-list"><li>None</li></ul>
+                <h4>Live Status & Worker Control</h4>
+                <p><strong>Worker Connection:</strong> <span id="worker-status">UNKNOWN</span></p>
+                <p><strong>Job Dispatch:</strong> <span id="queue-status">UNKNOWN</span></p>
+                <div class="admin-controls">
+                    <button id="toggle-queue-button">Pause/Resume Queue</button>
+                    <button id="disconnect-worker-button" class="danger">Disconnect Worker</button>
+                </div>
             </div>
 
-            <hr>
+            <div class="admin-section">
+                <h4>Job Queue (<span id="job-queue-count">0</span>)</h4>
+                <ul id="job-queue-list" class="status-list"><li>Queue is empty.</li></ul>
+                <div class="admin-controls">
+                    <button id="clear-queue-button" class="danger">Clear Job Queue</button>
+                </div>
+            </div>
 
             <div class="admin-section">
-                <h4>Cache Management</h4>
-                <div class="cache-control">
-                    <input type="text" id="clear-cache-query" placeholder="Enter query to clear...">
-                    <button id="clear-query-button">Clear Query</button>
-                </div>
-                <div class="cache-control">
-                    <button id="clear-all-cache-button">Clear Entire Cache</button>
-                </div>
+                <h4>Active Jobs (<span id="active-jobs-count">0</span>)</h4>
+                <ul id="active-jobs-list" class="status-list"><li>No active jobs.</li></ul>
             </div>
             
-            <hr>
-
-            <div class="admin-section maintenance-controls">
-                <h4>Maintenance Mode</h4>
-                <p>Current Status: <strong id="maintenance-status">UNKNOWN</strong></p>
-                <button id="toggle-maintenance-button">Toggle Service</button>
-                <p class="small-text">Disables the search function for all users.</p>
+            <div class="admin-section">
+                <h4>Cache Management</h4>
+                <p><strong>Search Results Cached:</strong> <span id="search-cache-size">0</span></p>
+                <p><strong>Images Cached Permanently:</strong> <span id="image-cache-size">0</span></p>
+                <div class="admin-controls">
+                    <button id="clear-full-cache-button" class="danger">Clear Search Cache</button>
+                    <button id="clear-image-cache-button" class="danger">Clear Image Cache</button>
+                </div>
+                <form id="single-cache-clear-form" class="cache-controls">
+                    <input type="text" id="single-cache-input" placeholder="Query to clear from search cache">
+                    <button type="submit">Clear Specific</button>
+                </form>
+            </div>
+            
+            <div class="admin-section">
+                <h4>System Control</h4>
+                <p>Maintenance Mode: <strong id="maintenance-status">UNKNOWN</strong></p>
+                <div class="admin-controls">
+                    <button id="toggle-maintenance-button">Toggle Maintenance</button>
+                </div>
             </div>
 
-            <hr>
-
             <div class="admin-section">
-                <h3>Traffic Stats</h3>
-                <p><strong>Total Searches:</strong> <span id="total-searches">0</span></p>
-                <p><strong>Unique Visitors:</strong> <span id="unique-visitors">0</span></p>
-                <h3>Recent Searches:</h3>
-                <ul id="search-history-list"></ul>
+                <h4>Traffic Stats & History</h4>
+                <p><strong>Total Searches:</strong> <span id="total-searches">0</span> | <strong>Unique Visitors:</strong> <span id="unique-visitors">0</span></p>
+                <p><strong>Recent Searches:</strong></p>
+                <ul id="search-history-list"><li>No searches recorded yet.</li></ul>
+                <div class="admin-controls">
+                     <button id="clear-stats-button" class="danger">Clear All Stats & History</button>
+                </div>
             </div>
         </div>
     </div>
