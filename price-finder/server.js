@@ -1,4 +1,4 @@
-// server.js (FINAL - With Correct JSON Parsing Logic)
+// server.js (FINAL - With Server-Side Fallback Trigger)
 
 const express = require('express');
 const cors = require('cors');
@@ -45,141 +45,72 @@ const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'com
 const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 2); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
 const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
 
-// --- PARSING FUNCTIONS ---
 function parsePythonResults(results) { return results.map(item => { const fullText = item.title; const priceMatch = fullText.match(/\$\s?[\d,]+(\.\d{2})?/); const priceString = priceMatch ? priceMatch[0] : null; const price = priceMatch ? parseFloat(priceString.replace(/[^0-9.]/g, '')) : null; const words = fullText.split(' '); const store = words[0]; if (!price) return null; return { title: fullText, price: price, price_string: priceString, store: store, url: item.url || '#' }; }).filter(Boolean); }
+function parsePriceApiResults(downloadedJobs) { let allResults = []; for (const jobData of downloadedJobs) { if (!jobData || !jobData.results || jobData.results.length === 0) continue; const sourceName = jobData.source || 'API Source'; const topic = jobData.topic; const jobResult = jobData.results[0]; if (topic === 'product_and_offers' && jobResult.content) { const content = jobResult.content; const offer = content.buybox; if (content.name && offer) { allResults.push({ title: content.name, price: parseFloat(offer.min_price), price_string: offer.min_price ? `$${parseFloat(offer.min_price).toFixed(2)}` : 'N/A', url: content.url, image: content.image_url, store: offer.shop_name || sourceName }); } } else if (topic === 'search_results' && jobResult.content?.search_results) { const searchResults = jobResult.content.search_results; const mapped = searchResults.map(item => { let price = null; let price_string = 'N/A'; if (item.price) { price = parseFloat(item.price_with_shipping) || parseFloat(item.price); price_string = item.price_string || `$${parseFloat(item.price).toFixed(2)}`; } else if (item.min_price) { price = parseFloat(item.min_price); price_string = `From $${price.toFixed(2)}`; } if (item.name && price !== null) { return { title: item.name, price: price, price_string: price_string, url: item.url, image: item.img_url, store: item.shop_name || sourceName }; } return null; }).filter(Boolean); allResults = allResults.concat(mapped); } } return allResults; }
 
-// --- MODIFICATION: The new, correct parser for PriceAPI.com's JSON structure ---
-function parsePriceApiResults(downloadedJobs) {
-    let allResults = [];
-    for (const jobData of downloadedJobs) {
-        if (!jobData || !jobData.results || jobData.results.length === 0) continue;
+async function searchPriceApiCom(query) { try { const jobsToSubmit = [{ source: 'amazon', topic: 'product_and_offers', key: 'term', values: query }, { source: 'ebay', topic: 'search_results', key: 'term', values: query, condition: 'any' }, { source: 'google_shopping', topic: 'search_results', key: 'term', values: query, condition: 'any' }]; const jobPromises = jobsToSubmit.map(job => axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', ...job }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message); return null; }) ); const jobResponses = (await Promise.all(jobPromises)).filter(Boolean); if (jobResponses.length === 0) return []; console.log(`[Backup API] Created ${jobResponses.length} jobs for "${query}". Waiting 30s for processing...`); await wait(30000); const resultPromises = jobResponses.map(job => axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to fetch results for job ID ${job.job_id}`, err.response?.data?.message || err.message); return null; }) ); return (await Promise.all(resultPromises)).filter(Boolean); } catch (err) { console.error("A critical error occurred in the searchPriceApiCom function:", err.message); return []; } }
 
-        const sourceName = jobData.source || 'API Source';
-        const topic = jobData.topic;
-        const jobResult = jobData.results[0]; // The actual result content is nested here
-
-        if (topic === 'product_and_offers' && jobResult.content) {
-            const content = jobResult.content;
-            const offer = content.buybox;
-            if (content.name && offer) {
-                allResults.push({
-                    title: content.name,
-                    price: parseFloat(offer.min_price),
-                    price_string: offer.min_price ? `$${parseFloat(offer.min_price).toFixed(2)}` : 'N/A',
-                    url: content.url,
-                    image: content.image_url,
-                    store: offer.shop_name || sourceName
-                });
-            }
-        } else if (topic === 'search_results' && jobResult.content?.search_results) {
-            const searchResults = jobResult.content.search_results;
-            const mapped = searchResults.map(item => {
-                let price = null;
-                let price_string = 'N/A';
-                if (item.price) {
-                    price = parseFloat(item.price_with_shipping) || parseFloat(item.price);
-                    price_string = item.price_string || `$${parseFloat(item.price).toFixed(2)}`;
-                } else if (item.min_price) {
-                    price = parseFloat(item.min_price);
-                    price_string = `From $${price.toFixed(2)}`;
-                }
-                if (item.name && price !== null) {
-                    return {
-                        title: item.name,
-                        price: price,
-                        price_string: price_string,
-                        url: item.url,
-                        image: item.img_url,
-                        store: item.shop_name || sourceName
-                    };
-                }
-                return null;
-            }).filter(Boolean);
-            allResults = allResults.concat(mapped);
-        }
-    }
-    return allResults;
-}
-
-
-// --- API CALLING FUNCTION (PriceAPI.com only) ---
-async function searchPriceApiCom(query) {
-    try {
-        const jobsToSubmit = [{ source: 'amazon', topic: 'product_and_offers', key: 'term', values: query }, { source: 'ebay', topic: 'search_results', key: 'term', values: query, condition: 'any' }, { source: 'google_shopping', topic: 'search_results', key: 'term', values: query, condition: 'any' }];
-        const jobPromises = jobsToSubmit.map(job => axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', ...job }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message); return null; }) );
-        const jobResponses = (await Promise.all(jobPromises)).filter(Boolean);
-        if (jobResponses.length === 0) return [];
-        
-        console.log(`[Backup API] Created ${jobResponses.length} jobs for "${query}". Waiting 30s for processing...`);
-        await wait(30000);
-
-        const resultPromises = jobResponses.map(job => axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to fetch results for job ID ${job.job_id}`, err.response?.data?.message || err.message); return null; }) );
-        // This now returns the full downloaded JSON objects for the new parser to handle
-        return (await Promise.all(resultPromises)).filter(Boolean);
-    } catch (err) { console.error("A critical error occurred in the searchPriceApiCom function:", err.message); return []; }
-}
-
-// --- MAIN ROUTES ---
 app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } } catch (e) {} const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData.results); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(cacheKey); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
 app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey).results); } else { return res.status(202).send(); }});
 
-// --- DATA SUBMISSION ENDPOINTS ---
-app.post('/submit-results', (req, res) => {
+// --- THIS IS THE NEW, INTELLIGENT DATA SUBMISSION ENDPOINT ---
+app.post('/submit-results', async (req, res) => {
     const { secret, query, results } = req.body;
     if (secret !== SERVER_SIDE_SECRET) { return res.status(403).send('Forbidden'); }
     if (!query || !results) { return res.status(400).send('Bad Request: Missing query or results.'); }
-    console.log(`[SCRAPER] Received ${results.length} raw results for "${query}". Filtering...`);
-    let allResults = parsePythonResults(results);
-    const isAccessorySearch = detectSearchIntent(query);
-    let finalFilteredResults;
-    if (isAccessorySearch) {
-        finalFilteredResults = filterResultsByQuery(allResults, query);
-    } else {
-        const priceFiltered = allResults.filter(item => item.price >= MIN_MAIN_PRODUCT_PRICE);
-        const accessoryFiltered = filterForIrrelevantAccessories(priceFiltered);
-        finalFilteredResults = filterForMainDevice(accessoryFiltered);
-    }
-    const sortedResults = finalFilteredResults.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) }));
-    searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
-    console.log(`[SCRAPER] SUCCESS: Cached ${sortedResults.length} filtered results for "${query}".`);
-    res.status(200).send('Results filtered and cached successfully.');
-});
-
-app.post('/report-failure', async (req, res) => {
-    const { secret, query } = req.body;
-    if (secret !== SERVER_SIDE_SECRET) { return res.status(403).send('Forbidden'); }
-    if (!query) { return res.status(400).send('Bad Request: Missing query.'); }
     
-    console.log(`[FALLBACK] Primary scraper failed for "${query}". Triggering PriceAPI.com...`);
-    res.status(200).send('Failure reported. Backup API initiated.');
+    // Respond to the scraper immediately so it doesn't have to wait.
+    res.status(200).send('Results received. Processing now.');
 
-    try {
-        const downloadedJobs = await searchPriceApiCom(query);
-        // MODIFICATION: Pass the raw downloaded files to the new parser
-        let allResults = parsePriceApiResults(downloadedJobs)
-            .map(item => ({ ...item, price: parseFloat(String(item.price_string || item.price).replace(/[^0-9.]/g, '')), image: formatImageUrl(item.image) }))
-            .filter(item => !isNaN(item.price));
-        
-        console.log(`[Backup API] Parsed ${allResults.length} initial results for "${query}". Filtering...`);
-        const isAccessorySearch = detectSearchIntent(query);
-
-        let finalFilteredResults;
-        if (isAccessorySearch) {
-            finalFilteredResults = filterResultsByQuery(allResults, query);
-        } else {
-            const priceFiltered = allResults.filter(item => item.price >= MIN_MAIN_PRODUCT_PRICE);
-            const accessoryFiltered = filterForIrrelevantAccessories(priceFiltered);
-            finalFilteredResults = filterForMainDevice(accessoryFiltered);
-        }
-
-        const sortedResults = finalFilteredResults.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) }));
+    console.log(`[SCRAPER] Received ${results.length} raw results for "${query}". Filtering...`);
+    let allScraperResults = parsePythonResults(results);
+    const isAccessorySearch = detectSearchIntent(query);
+    
+    let finalFilteredScraperResults;
+    if (isAccessorySearch) {
+        finalFilteredScraperResults = filterResultsByQuery(allScraperResults, query);
+    } else {
+        const priceFiltered = allScraperResults.filter(item => item.price >= MIN_MAIN_PRODUCT_PRICE);
+        const accessoryFiltered = filterForIrrelevantAccessories(priceFiltered);
+        finalFilteredScraperResults = filterForMainDevice(accessoryFiltered);
+    }
+    
+    // --- THIS IS THE CRITICAL LOGIC CHANGE ---
+    if (finalFilteredScraperResults.length > 0) {
+        // SUCCESS: The scraper found good results. Cache them.
+        console.log(`[SCRAPER] Found ${finalFilteredScraperResults.length} valid results after filtering.`);
+        const sortedResults = finalFilteredScraperResults.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) }));
         searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
-        console.log(`[Backup API] SUCCESS: Cached ${sortedResults.length} filtered results for "${query}".`);
-    } catch (error) {
-        console.error(`[Backup API] A critical error occurred during the fallback for "${query}":`, error);
-        searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
+    } else {
+        // FAILURE: The scraper's results were all junk. Trigger the backup API.
+        console.log(`[FALLBACK] Scraper results for "${query}" were all filtered out. Triggering backup API...`);
+        try {
+            const downloadedJobs = await searchPriceApiCom(query);
+            let allApiResults = parsePriceApiResults(downloadedJobs)
+                .map(item => ({ ...item, price: parseFloat(String(item.price_string || item.price).replace(/[^0-9.]/g, '')), image: formatImageUrl(item.image) }))
+                .filter(item => !isNaN(item.price));
+            
+            console.log(`[Backup API] Parsed ${allApiResults.length} initial results for "${query}". Filtering...`);
+            let finalFilteredApiResults;
+            if (isAccessorySearch) {
+                finalFilteredApiResults = filterResultsByQuery(allApiResults, query);
+            } else {
+                const priceFiltered = allApiResults.filter(item => item.price >= MIN_MAIN_PRODUCT_PRICE);
+                const accessoryFiltered = filterForIrrelevantAccessories(priceFiltered);
+                finalFilteredApiResults = filterForMainDevice(accessoryFiltered);
+            }
+
+            const sortedResults = finalFilteredApiResults.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) }));
+            searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
+            console.log(`[Backup API] SUCCESS: Cached ${sortedResults.length} filtered results for "${query}".`);
+        } catch (error) {
+            console.error(`[Backup API] A critical error occurred during the fallback for "${query}":`, error);
+            searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
+        }
     }
 });
+
+// MODIFICATION: The old /report-failure endpoint is no longer needed and has been removed.
 
 // --- ADMIN ROUTES ---
 app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory, isServiceDisabled: isMaintenanceModeEnabled }); });
