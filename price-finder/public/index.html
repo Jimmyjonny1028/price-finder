@@ -20,7 +20,21 @@
         <div class="controls-container" id="controls-container" style="display: none;">
             <div class="control-group"> <label for="sort-select">Sort by:</label> <select id="sort-select"> <option value="price-asc">Price: Low to High</option> <option value="price-desc">Price: High to Low</option> </select> </div>
             <div class="control-group"> <label for="condition-filter-select">Condition:</label> <select id="condition-filter-select"> <option value="all">All Conditions</option> <option value="new">New Only</option> <option value="refurbished">Refurbished Only</option> </select> </div>
-            <div class="control-group"> <label for="store-filter-select">Store:</label> <select id="store-filter-select"> <option value="all">All Stores</option> </select> </div>
+            
+            <div class="control-group">
+                <label>Store:</label>
+                <div class="dropdown-check-container">
+                    <button type="button" id="store-filter-button">All Stores</button>
+                    <div id="store-filter-panel" class="hidden">
+                        <div class="dropdown-actions">
+                            <button type="button" id="store-select-all-button">Select All</button>
+                            <button type="button" id="store-unselect-all-button">Unselect All</button>
+                        </div>
+                        <ul id="store-filter-list">
+                            </ul>
+                    </div>
+                </div>
+            </div>
         </div>
         <div id="loader" class="hidden"> <div class="spinner"></div> <p>Contacting local scraper...</p> </div>
         <div id="results-container"></div>
