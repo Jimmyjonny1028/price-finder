@@ -36,7 +36,16 @@ let liveState = {
 const IMAGE_CACHE_PATH = path.join(__dirname, 'image_cache.json');
 const LIVE_STATE_PATH = path.join(__dirname, 'public', 'live_state.json');
 
-async function updateLiveStateFile() { liveState.onlineUsers = onlineUserTimeouts.size; try { await fs.writeFile(LIVE_STATE_PATH, JSON.stringify(liveState, null, 2), 'utf8'); } catch (error) { console.error('Error writing live state file:', error); } }
+// --- Helper Functions ---
+async function updateLiveStateFile() {
+    liveState.onlineUsers = onlineUserTimeouts.size;
+    try {
+        await fs.writeFile(LIVE_STATE_PATH, JSON.stringify(liveState, null, 2), 'utf8');
+    } catch (error) {
+        console.error('Error writing live state file:', error);
+    }
+}
+
 async function loadImageCacheFromFile() { try { await fs.access(IMAGE_CACHE_PATH); const data = await fs.readFile(IMAGE_CACHE_PATH, 'utf8'); const plainObject = JSON.parse(data); imageCache = new Map(Object.entries(plainObject)); console.log(`✅ Permanent image cache loaded successfully from ${IMAGE_CACHE_PATH}`); } catch (error) { if (error.code === 'ENOENT') { console.log('Image cache file not found. A new one will be created when needed.'); } else { console.error('Error loading image cache from file:', error); } imageCache = new Map(); } }
 async function saveImageCacheToFile() { try { const plainObject = Object.fromEntries(imageCache); const jsonString = JSON.stringify(plainObject, null, 2); await fs.writeFile(IMAGE_CACHE_PATH, jsonString, 'utf8'); } catch (error) { console.error('Error saving image cache to file:', error); } }
 
@@ -69,30 +78,7 @@ const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'com
 const filterResultsByQuery = (results, query) => { const queryLower = query.toLowerCase(); const queryWords = queryLower.split(' ').filter(w => w.length > 1 && isNaN(w)); const queryNumbers = queryLower.split(' ').filter(w => !isNaN(w) && w.length > 0); if (queryWords.length === 0 && queryNumbers.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); const hasAllWords = queryWords.every(word => itemTitle.includes(word)); const hasAllNumbers = queryNumbers.every(num => itemTitle.includes(num)); return hasAllWords && hasAllNumbers; }); };
 const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); const allKeywords = [...ACCESSORY_KEYWORDS, ...COMPONENT_KEYWORDS]; return allKeywords.some(keyword => queryLower.includes(keyword)); };
 const extractColorFromTitle = (title) => { const titleLower = title.toLowerCase(); for (const color of COLOR_LIST) { if (titleLower.includes(color)) return color; } return null; };
-
-// ### FIXED: This parser no longer modifies the title, preventing filtering errors ###
-function parsePythonResults(results) {
-    return results.map(item => {
-        const fullText = item.title; // Use the original, unmodified text
-        const priceMatch = fullText.match(/\$\s?[\d,]+(\.\d{2})?/);
-        const priceString = priceMatch ? priceMatch[0] : null;
-        const price = priceString ? parseFloat(priceString.replace(/[^0-9.]/g, '')) : null;
-
-        if (!price) return null;
-        
-        // Simple store extraction that doesn't modify the title
-        const store = fullText.split(' ')[0];
-
-        return {
-            title: fullText, // Pass the full, original title to the filters
-            price: price,
-            price_string: priceString,
-            store: store,
-            url: item.url || '#'
-        };
-    }).filter(Boolean);
-}
-
+function parsePythonResults(results) { return results.map(item => { const price = item.price_string ? parseFloat(item.price_string.replace(/[^0-9.]/g, '')) : null; if (!price || !item.store || !item.title) return null; return { title: item.title, price: price, price_string: item.price_string, store: item.store, url: item.url || '#' }; }).filter(Boolean); }
 function parsePriceApiResults(downloadedJobs) { let allResults = []; for (const jobData of downloadedJobs) { if (!jobData || !jobData.results || jobData.results.length === 0) continue; const sourceName = jobData.source || 'API Source'; const topic = jobData.topic; const jobResult = jobData.results[0]; let mapped = []; if (topic === 'product_and_offers' && jobResult.content) { const content = jobResult.content; const offer = content.buybox; if (content.name && offer && offer.min_price) { mapped.push({ title: content.name, price: parseFloat(offer.min_price), price_string: offer.min_price ? `$${parseFloat(offer.min_price).toFixed(2)}` : 'N/A', url: content.url, image: content.image_url, store: offer.shop_name || sourceName }); } } else if (topic === 'search_results' && jobResult.content?.search_results) { const searchResults = jobResult.content.search_results; mapped = searchResults.map(item => { let price = null; let price_string = 'N/A'; if (item.price) { price = parseFloat(item.price); price_string = item.price_string || `$${parseFloat(item.price).toFixed(2)}`; } else if (item.min_price) { price = parseFloat(item.min_price); price_string = `From $${price.toFixed(2)}`; } if (item.name && price !== null) { return { title: item.name, price: price, price_string: price_string, url: item.url, image: item.img_url, store: item.shop_name || sourceName }; } return null; }).filter(Boolean); } allResults = allResults.concat(mapped); } return allResults; }
 function filterByMeanPrice(results, thresholdFactor = 0.5) { if (results.length < 5) { return results; } const prices = results.map(item => item.price).filter(price => price > 0); if (prices.length < 3) { return results; } const sum = prices.reduce((a, b) => a + b, 0); const mean = sum / prices.length; const priceThreshold = mean * thresholdFactor; console.log(`[Dynamic Filter] Mean price: $${mean.toFixed(2)}, Filtering items below: $${priceThreshold.toFixed(2)}`); return results.filter(item => item.price >= priceThreshold); }
 async function searchPriceApiCom(query) { try { const negative_keywords = ['case', 'protector', 'strap', 'charger', 'band', 'replacement']; const jobsToSubmit = [ { source: 'amazon', country: 'au', topic: 'product_and_offers', key: 'term', values: query }, { source: 'ebay', country: 'au', topic: 'search_results', key: 'term', values: query, condition: 'any' }, { source: 'google_shopping', country: 'au', topic: 'search_results', key: 'term', values: query, condition: 'any', negative_keywords: negative_keywords.join(',') } ]; const jobPromises = jobsToSubmit.map(job => axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, ...job }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message); return null; }) ); const jobResponses = (await Promise.all(jobPromises)).filter(Boolean); if (jobResponses.length === 0) return []; console.log(`[Backup API] Created ${jobResponses.length} jobs for "${query}". Waiting 15s...`); await wait(15000); const resultPromises = jobResponses.map(job => axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to fetch results for job ID ${job.job_id}`, err.response?.data?.message || err.message); return null; }) ); return (await Promise.all(resultPromises)).filter(Boolean); } catch (err) { console.error("A critical error occurred in the searchPriceApiCom function:", err.message); return []; } }
@@ -113,10 +99,11 @@ app.post('/admin/clear-queue', (req, res) => { const { code } = req.body; if (!c
 app.post('/admin/disconnect-worker', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); if (workerSocket) { workerSocket.close(); console.log("ADMIN ACTION: Forcibly disconnected the worker."); res.json({ message: 'Worker has been disconnected.' }); } else { res.status(404).json({ message: 'No worker is currently connected.' }); } });
 app.post('/admin/clear-image-cache', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); imageCache.clear(); await saveImageCacheToFile(); console.log("ADMIN ACTION: Permanent image cache has been cleared."); res.json({ message: 'The permanent image cache has been cleared.' }); });
 app.post('/admin/clear-stats', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); trafficLog.totalSearches = 0; trafficLog.uniqueVisitors.clear(); trafficLog.searchHistory = []; searchTermFrequency.clear(); console.log("ADMIN ACTION: All traffic stats and search history have been cleared."); res.json({ message: 'All traffic stats and search history have been cleared.' }); });
-app.post('/admin/set-theme', async (req, res) => { const { code, theme } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const validThemes = ['default', 'dark', 'retro']; if (theme && validThemes.includes(theme)) { liveState.theme = theme; await updateLiveStateFile(); console.log(`ADMIN ACTION: Global theme changed to "${theme}".`); res.json({ message: `Theme changed to ${theme}.` }); } else { res.status(400).json({ error: 'Invalid theme specified.' }); } });
+app.post('/admin/set-theme', async (req, res) => { const { code, theme } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const validThemes = ['default', 'dark', 'retro', 'sepia', 'solarized', 'synthwave']; if (theme && validThemes.includes(theme)) { liveState.theme = theme; await updateLiveStateFile(); console.log(`ADMIN ACTION: Global theme changed to "${theme}".`); res.json({ message: `Theme changed to ${theme}.` }); } else { res.status(400).json({ error: 'Invalid theme specified.' }); } });
 app.post('/admin/trigger-rain', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); liveState.rainEventTimestamp = Date.now(); await updateLiveStateFile(); console.log("ADMIN ACTION: Triggered global 'Make It Rain' event."); res.json({ message: 'Rain event triggered for all active users.' }); });
 
 async function startServer() {
+    // Dynamically import p-limit
     const pLimitModule = await import('p-limit');
     limit = pLimitModule.default(2);
     
