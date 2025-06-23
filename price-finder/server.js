@@ -36,16 +36,7 @@ let liveState = {
 const IMAGE_CACHE_PATH = path.join(__dirname, 'image_cache.json');
 const LIVE_STATE_PATH = path.join(__dirname, 'public', 'live_state.json');
 
-// --- Helper Functions ---
-async function updateLiveStateFile() {
-    liveState.onlineUsers = onlineUserTimeouts.size;
-    try {
-        await fs.writeFile(LIVE_STATE_PATH, JSON.stringify(liveState, null, 2), 'utf8');
-    } catch (error) {
-        console.error('Error writing live state file:', error);
-    }
-}
-
+async function updateLiveStateFile() { liveState.onlineUsers = onlineUserTimeouts.size; try { await fs.writeFile(LIVE_STATE_PATH, JSON.stringify(liveState, null, 2), 'utf8'); } catch (error) { console.error('Error writing live state file:', error); } }
 async function loadImageCacheFromFile() { try { await fs.access(IMAGE_CACHE_PATH); const data = await fs.readFile(IMAGE_CACHE_PATH, 'utf8'); const plainObject = JSON.parse(data); imageCache = new Map(Object.entries(plainObject)); console.log(`✅ Permanent image cache loaded successfully from ${IMAGE_CACHE_PATH}`); } catch (error) { if (error.code === 'ENOENT') { console.log('Image cache file not found. A new one will be created when needed.'); } else { console.error('Error loading image cache from file:', error); } imageCache = new Map(); } }
 async function saveImageCacheToFile() { try { const plainObject = Object.fromEntries(imageCache); const jsonString = JSON.stringify(plainObject, null, 2); await fs.writeFile(IMAGE_CACHE_PATH, jsonString, 'utf8'); } catch (error) { console.error('Error saving image cache to file:', error); } }
 
@@ -79,16 +70,11 @@ const filterResultsByQuery = (results, query) => { const queryLower = query.toLo
 const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); const allKeywords = [...ACCESSORY_KEYWORDS, ...COMPONENT_KEYWORDS]; return allKeywords.some(keyword => queryLower.includes(keyword)); };
 const extractColorFromTitle = (title) => { const titleLower = title.toLowerCase(); for (const color of COLOR_LIST) { if (titleLower.includes(color)) return color; } return null; };
 
-// ### MODIFIED: This function is now much simpler as it receives clean data ###
+// ### FIXED: This function is now simple and trusts the clean data from the scraper ###
 function parsePythonResults(results) {
     return results.map(item => {
-        // The Python script now sends structured data, so we just parse the price.
         const price = item.price_string ? parseFloat(item.price_string.replace(/[^0-9.]/g, '')) : null;
-
-        if (!price || !item.store || !item.title) {
-            return null; // Reject malformed items
-        }
-
+        if (!price || !item.store || !item.title) return null;
         return {
             title: item.title,
             price: price,
