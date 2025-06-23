@@ -16,27 +16,25 @@ const server = http.createServer(app);
 
 let limit;
 
-// State Management
+// Caches and State
 const searchCache = new Map();
 let imageCache = new Map();
+const IMAGE_CACHE_PATH = path.join(__dirname, 'image_cache.json');
+const CACHE_DURATION_MS = 60 * 60 * 1000; // ### THIS LINE IS THE FIX FOR THE CRASH ###
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
+const MAX_HISTORY = 50;
+const onlineUsers = new Map();
+const USER_ONLINE_TIMEOUT_MS = 65 * 1000;
 let isQueueProcessingPaused = false;
 let isMaintenanceModeEnabled = false;
 
-// ### NEW: Central object for all live state, written to a file ###
 let liveState = {
     theme: 'default',
     rainEventTimestamp: 0,
     onlineUsers: 0
 };
-const onlineUserTimeouts = new Map();
-const USER_ONLINE_TIMEOUT_MS = 65 * 1000; // 65 seconds
-
-// File Paths
-const IMAGE_CACHE_PATH = path.join(__dirname, 'image_cache.json');
 const LIVE_STATE_PATH = path.join(__dirname, 'public', 'live_state.json');
 
-// --- Helper Functions ---
 async function updateLiveStateFile() {
     liveState.onlineUsers = onlineUserTimeouts.size;
     try {
@@ -86,29 +84,11 @@ async function searchPriceApiCom(query) { try { const jobsToSubmit = [{ source: 
 async function fetchImageForQuery(query) { const cacheKey = query.toLowerCase(); if (imageCache.has(cacheKey)) { return imageCache.get(cacheKey); } const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A'; if (!GOOGLE_API_KEY || !GOOGLE_CSE_ID) { return placeholder; } try { const response = await limit(() => { const url = `https://www.googleapis.com/customsearch/v1`; const params = { key: GOOGLE_API_KEY, cx: GOOGLE_CSE_ID, q: query, searchType: 'image', num: 1 }; return axios.get(url, { params }); }); const imageUrl = response.data.items?.[0]?.link || placeholder; imageCache.set(cacheKey, imageUrl); await saveImageCacheToFile(); return imageUrl; } catch (error) { console.error(`[FATAL] Google Image Search request failed for query: "${query}"`); if (error.response) { console.error('Error Data:', JSON.stringify(error.response.data, null, 2)); } else { console.error('Error Message:', error.message); } return placeholder; } }
 async function enrichResultsWithImages(results, baseQuery) { if (results.length === 0) return results; const defaultImageUrl = await fetchImageForQuery(baseQuery); const uniqueColors = new Set(results.map(result => extractColorFromTitle(result.title)).filter(Boolean)); const colorsToFetch = Array.from(uniqueColors).slice(0, 2); const colorImageMap = new Map(); if (colorsToFetch.length > 0) { console.log(`Enriching with up to 2 extra color-specific images for: ${colorsToFetch.join(', ')}`); } await Promise.all(colorsToFetch.map(async (color) => { const specificQuery = `${baseQuery} ${color}`; const imageUrl = await fetchImageForQuery(specificQuery); colorImageMap.set(color, imageUrl); })); results.forEach(result => { const color = extractColorFromTitle(result.title); result.image = colorImageMap.get(color) || defaultImageUrl; }); return results; }
 
-// Main application routes
 app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } } catch (e) {} const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData.results); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
 app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey).results); } else { return res.status(202).send(); }});
 app.post('/submit-results', async (req, res) => { const { secret, query, results } = req.body; if (secret !== SERVER_SIDE_SECRET) { return res.status(403).send('Forbidden'); } if (!query || !results) { return res.status(400).send('Bad Request: Missing query or results.'); } res.status(200).send('Results received. Processing now.'); let allScraperResults = parsePythonResults(results); const isComponentOrAccessory = detectSearchIntent(query); let finalFilteredScraperResults = []; let triggerFallback = false; if (allScraperResults.length > 0) { if (isComponentOrAccessory) { finalFilteredScraperResults = filterResultsByQuery(allScraperResults, query); } else { const maxPrice = Math.max(...allScraperResults.map(item => item.price)); if (maxPrice < MAIN_PRODUCT_PRICE_THRESHOLD) { console.log(`[Fallback Trigger] Main product search for "${query}" only found cheap items (max price: $${maxPrice.toFixed(2)}). Discarding scraper results.`); triggerFallback = true; } else { const priceFiltered = filterByMeanPrice(allScraperResults); const accessoryFiltered = filterForIrrelevantAccessories(priceFiltered); const mainDeviceFiltered = filterForMainDevice(accessoryFiltered); finalFilteredScraperResults = filterResultsByQuery(mainDeviceFiltered, query); } } } if (finalFilteredScraperResults.length === 0 && !triggerFallback) { triggerFallback = true; } if (triggerFallback) { console.log(`[Fallback] Running backup API for "${query}".`); try { const downloadedJobs = await searchPriceApiCom(query); let allApiResults = parsePriceApiResults(downloadedJobs); let finalApiResults = isComponentOrAccessory ? allApiResults : filterByMeanPrice(allApiResults); finalApiResults = filterResultsByQuery(finalApiResults, query); const resultsWithImages = await enrichResultsWithImages(finalApiResults, query); const sortedResults = resultsWithImages.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) })); searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() }); } catch (error) { console.error(`[Backup API] A critical error occurred during the fallback for "${query}":`, error); searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() }); } } else { const resultsWithImages = await enrichResultsWithImages(finalFilteredScraperResults, query); const sortedResults = resultsWithImages.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) })); searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() }); } });
 
-// ### NEW: Heartbeat endpoint for tracking online users ###
-app.post('/api/ping', (req, res) => {
-    const { sessionID } = req.body;
-    if (!sessionID) return res.status(400).send();
-    
-    if (onlineUserTimeouts.has(sessionID)) {
-        clearTimeout(onlineUserTimeouts.get(sessionID));
-    }
-    const timeoutID = setTimeout(() => {
-        onlineUserTimeouts.delete(sessionID);
-        updateLiveStateFile(); // Update user count when a user times out
-    }, USER_ONLINE_TIMEOUT_MS);
-    onlineUserTimeouts.set(sessionID, timeoutID);
-
-    updateLiveStateFile(); // Update user count when a user pings
-    res.status(200).json({ status: 'ok' });
-});
-
+app.post('/api/ping', (req, res) => { const { sessionID } = req.body; if (!sessionID) return res.status(400).send(); if (onlineUserTimeouts.has(sessionID)) { clearTimeout(onlineUserTimeouts.get(sessionID)); } const timeoutID = setTimeout(() => { onlineUserTimeouts.delete(sessionID); updateLiveStateFile(); }, USER_ONLINE_TIMEOUT_MS); onlineUserTimeouts.set(sessionID, timeoutID); updateLiveStateFile(); res.status(200).json({ status: 'ok' }); });
 
 // --- ADMIN ROUTES ---
 app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory, isServiceDisabled: isMaintenanceModeEnabled, workerStatus: workerSocket ? 'Connected' : 'Disconnected', activeJobs: Array.from(workerActiveJobs), jobQueue: jobQueue, isQueuePaused: isQueueProcessingPaused, imageCacheSize: imageCache.size, currentTheme: liveState.theme, onlineUsers: liveState.onlineUsers }); });
@@ -119,30 +99,8 @@ app.post('/admin/clear-queue', (req, res) => { const { code } = req.body; if (!c
 app.post('/admin/disconnect-worker', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); if (workerSocket) { workerSocket.close(); console.log("ADMIN ACTION: Forcibly disconnected the worker."); res.json({ message: 'Worker has been disconnected.' }); } else { res.status(404).json({ message: 'No worker is currently connected.' }); } });
 app.post('/admin/clear-image-cache', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); imageCache.clear(); await saveImageCacheToFile(); console.log("ADMIN ACTION: Permanent image cache has been cleared."); res.json({ message: 'The permanent image cache has been cleared.' }); });
 app.post('/admin/clear-stats', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); trafficLog.totalSearches = 0; trafficLog.uniqueVisitors.clear(); trafficLog.searchHistory = []; console.log("ADMIN ACTION: All traffic stats and search history have been cleared."); res.json({ message: 'All traffic stats and search history have been cleared.' }); });
-
-app.post('/admin/set-theme', async (req, res) => {
-    const { code, theme } = req.body;
-    if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' });
-    const validThemes = ['default', 'dark', 'retro'];
-    if (theme && validThemes.includes(theme)) {
-        liveState.theme = theme;
-        await updateLiveStateFile();
-        console.log(`ADMIN ACTION: Global theme changed to "${theme}".`);
-        res.json({ message: `Theme changed to ${theme}.` });
-    } else {
-        res.status(400).json({ error: 'Invalid theme specified.' });
-    }
-});
-
-app.post('/admin/trigger-rain', async (req, res) => {
-    const { code } = req.body;
-    if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' });
-    liveState.rainEventTimestamp = Date.now();
-    await updateLiveStateFile();
-    console.log("ADMIN ACTION: Triggered global 'Make It Rain' event.");
-    res.json({ message: 'Rain event triggered for all active users.' });
-});
-
+app.post('/admin/set-theme', async (req, res) => { const { code, theme } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const validThemes = ['default', 'dark', 'retro']; if (theme && validThemes.includes(theme)) { liveState.theme = theme; await updateLiveStateFile(); console.log(`ADMIN ACTION: Global theme changed to "${theme}".`); res.json({ message: `Theme changed to ${theme}.` }); } else { res.status(400).json({ error: 'Invalid theme specified.' }); } });
+app.post('/admin/trigger-rain', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); liveState.rainEventTimestamp = Date.now(); await updateLiveStateFile(); console.log("ADMIN ACTION: Triggered global 'Make It Rain' event."); res.json({ message: 'Rain event triggered for all active users.' }); });
 
 // Start server
 async function startServer() {
@@ -150,7 +108,7 @@ async function startServer() {
     limit = pLimitModule.default(2);
     
     await loadImageCacheFromFile();
-    await updateLiveStateFile(); // Create the initial live_state.json
+    await updateLiveStateFile();
     server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
 }
 
