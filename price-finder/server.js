@@ -1,4 +1,4 @@
-// server.js (FINAL, Definitive Version with Negative Filtering)
+// server.js (FINAL, Definitive Version with Dynamic Heuristics)
 
 const express = require('express');
 const cors = require('cors');
@@ -55,39 +55,88 @@ function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueu
 wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
 
 
-// --- FINAL, SIMPLIFIED FILTERING LOGIC ---
+// --- DYNAMIC RELEVANCE & FILTERING LOGIC (V3 - Scalable) ---
+/**
+ * Analyzes an entire set of search results to dynamically score them for relevance.
+ * This approach does not rely on hardcoded keyword lists.
+ *
+ * @param {Array} results - The array of parsed result objects from the scraper.
+ * @param {string} query - The original user search query.
+ * @returns {Array} - The sorted and scored array of results.
+ */
+function processAndScoreResults(results, query) {
+    if (results.length === 0) {
+        return [];
+    }
 
-// This list contains words that indicate an item is an accessory or is 'for' another product.
-const NEGATIVE_KEYWORDS = [
-    'case', 'cover', 'protector', 'screen', 'film', 'glass',
-    'for ', 'fits', 'compatible with', 'designed for',
-    'charger', 'cable', 'adapter', 'stand', 'dock', 'mount', 'holder',
-    'strap', 'band', 'replacement',
-    'kit'
-];
+    // --- Step 1: Price Distribution Analysis ---
+    // First, we analyze the prices to find a dynamic "accessory threshold".
+    const prices = results.map(r => r.price).sort((a, b) => a - b);
+    const medianPrice = prices[Math.floor(prices.length / 2)];
 
-function isAccessorySearch(query) {
-    const queryLower = query.toLowerCase();
-    const accessoryIntentKeywords = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand'];
-    return accessoryIntentKeywords.some(keyword => queryLower.includes(keyword));
+    // An "accessory" is often priced significantly lower than the median product price.
+    // We'll set our threshold at 40% of the median price. This is a robust heuristic.
+    // We also set a minimum floor to avoid issues with very cheap products.
+    const dynamicAccessoryThreshold = Math.max(medianPrice * 0.4, 30);
+    
+    console.log(`[Dynamic Analysis] Median Price: $${medianPrice.toFixed(2)}. Calculated Accessory Threshold: $${dynamicAccessoryThreshold.toFixed(2)}`);
+
+    const queryWords = new Set(query.toLowerCase().split(' ').filter(w => w.length > 2));
+
+
+    // --- Step 2: Score Each Item Individually ---
+    const scoredResults = results.map(item => {
+        let score = 100; // Start with a base score
+        const titleWords = item.title.toLowerCase().split(' ');
+
+        // --- Signal 1: Price Heuristic (Dynamic) ---
+        // If the item's price is below our dynamically calculated threshold, it's very likely an accessory.
+        if (item.price < dynamicAccessoryThreshold) {
+            score -= 80;
+        }
+
+        // --- Signal 2: Title Wordiness ---
+        // Accessories usually have more words in their title than the query.
+        const wordDelta = titleWords.length - queryWords.size;
+        if (wordDelta > 3) {
+            score -= wordDelta * 5; // Penalize for each extra word over a small buffer.
+        }
+
+        // --- Signal 3: Unrelated Words ---
+        // How many words in the title are NOT in the original query? A high number is a red flag.
+        let foreignWords = 0;
+        for (const word of titleWords) {
+            if (!queryWords.has(word)) {
+                foreignWords++;
+            }
+        }
+        // If more than 60% of the words are "foreign", it's likely an accessory description.
+        const foreignRatio = foreignWords / titleWords.length;
+        if (foreignRatio > 0.6) {
+            score -= 50;
+        }
+
+        // --- Signal 4: Query word matching (Bonus) ---
+        // Does the title contain all the words from the query?
+        const hasAllQueryWords = [...queryWords].every(qw => item.title.toLowerCase().includes(qw));
+        if (!hasAllQueryWords) {
+             score -= 100; // Heavy penalty if it doesn't even match the query properly.
+        }
+
+        return { ...item, relevanceScore: score };
+    });
+
+    // --- Step 3: Final Sort ---
+    // Filter out anything with a very low score and sort by relevance, then price.
+    const relevantResults = scoredResults.filter(item => item.relevanceScore > 0);
+    
+    return relevantResults.sort((a, b) => {
+        if (a.relevanceScore !== b.relevanceScore) {
+            return b.relevanceScore - a.relevanceScore; // Higher score first
+        }
+        return a.price - b.price; // If scores are equal, cheaper first
+    });
 }
-
-const filterByQueryStrict = (results, query) => {
-    const queryWords = query.toLowerCase().split(' ').filter(w => w.length > 0);
-    if (queryWords.length === 0) return results;
-
-    return results.filter(item => {
-        const itemTitle = item.title.toLowerCase();
-        return queryWords.every(word => itemTitle.includes(word));
-    });
-};
-
-const filterOutAccessories = (results) => {
-    return results.filter(item => {
-        const itemTitle = item.title.toLowerCase();
-        return !NEGATIVE_KEYWORDS.some(keyword => itemTitle.includes(keyword));
-    });
-};
 
 
 // --- UTILITY FUNCTIONS (unchanged) ---
@@ -108,27 +157,24 @@ app.post('/submit-results', async (req, res) => {
     if (!query || !results) { return res.status(400).send('Bad Request: Missing query or results.'); }
     res.status(200).send('Results received. Processing now.');
 
-    let pipeline = parsePythonResults(results);
+    const pipeline = parsePythonResults(results);
     console.log(`[Start] Received ${pipeline.length} results from scraper for "${query}".`);
 
-    pipeline = filterByQueryStrict(pipeline, query);
-    console.log(`[Filter 1] ${pipeline.length} results remain after strict query filter.`);
+    // The single, powerful call to our new dynamic processing function
+    const processedResults = processAndScoreResults(pipeline, query);
 
-    if (!isAccessorySearch(query)) {
-        console.log(`[Filter 2] Main product search detected. Applying negative filter to remove accessories.`);
-        pipeline = filterOutAccessories(pipeline);
-        console.log(`[Filter 2] ${pipeline.length} results remain after negative filter.`);
-    } else {
-        console.log(`[Filter 2] Accessory search detected. Skipping negative filter.`);
-    }
+    console.log(`[Finish] ${processedResults.length} relevant results found for "${query}" after dynamic scoring.`);
 
-    if (pipeline.length > 0) {
-        const resultsWithImages = await enrichResultsWithImages(pipeline, query);
-        const sortedResults = resultsWithImages.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) }));
-        searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
-        console.log(`[Success] Processed and cached ${sortedResults.length} relevant results for "${query}".`);
+    if (processedResults.length > 0) {
+        const resultsWithImages = await enrichResultsWithImages(processedResults, query);
+        const finalResults = resultsWithImages.map(item => ({ 
+            ...item, 
+            condition: detectItemCondition(item.title) 
+        }));
+        searchCache.set(query.toLowerCase(), { results: finalResults, timestamp: Date.now() });
+        console.log(`[Success] Processed and cached ${finalResults.length} relevant results for "${query}".`);
     } else {
-        console.log(`[Finish] No relevant results found for "${query}" after all filtering. Caching empty result.`);
+        console.log(`[Finish] No relevant results found. Caching empty result.`);
         searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
     }
 });
