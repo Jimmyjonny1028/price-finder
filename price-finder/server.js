@@ -1,4 +1,4 @@
-// server.js (FINAL V17, with static error examples)
+// server.js (FINAL V18, with Dynamic Query Suggestion)
 
 const express = require('express');
 const cors = require('cors');
@@ -103,6 +103,18 @@ async function fetchOzbargainBackup(query) {
 }
 
 // Search & Filtering Logic
+function simplifyQuery(query) {
+    const words = query.split(' ');
+    if (words.length <= 2) return null;
+    let lastCoreWordIndex = -1;
+    words.forEach((word, index) => { if (/\d/.test(word)) { lastCoreWordIndex = index; } });
+    if (lastCoreWordIndex > 0) {
+        const simplified = words.slice(0, lastCoreWordIndex + 1).join(' ');
+        return simplified !== query ? simplified : null;
+    }
+    const simplified = words.slice(0, 2).join(' ');
+    return simplified !== query ? simplified : null;
+}
 function getQueryIntent(query) { const lowerQuery = query.toLowerCase(); if (INTENT_ACCESSORY_KEYWORDS.some(keyword => lowerQuery.includes(keyword))) return 'FIND_ACCESSORY'; return 'FIND_MAIN_PRODUCT'; }
 function filterByQueryStrictness(results, query) {
     const stopWords = new Set(['a', 'an', 'the', 'in', 'on', 'for', 'with', 'and', 'or']);
@@ -182,8 +194,14 @@ app.post('/submit-results', async (req, res) => {
         searchCache.set(query.toLowerCase(), { results: finalResults, timestamp: Date.now() });
         console.log(`[Success] Processed and cached ${finalResults.length} deals for "${query}".`);
     } else {
-        console.log(`[Finish] No relevant results found.`);
-        searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
+        const simplifiedQuery = simplifyQuery(query);
+        if (simplifiedQuery) {
+            console.log(`[Suggestion] No results found. Suggesting simplified query: "${simplifiedQuery}"`);
+            searchCache.set(query.toLowerCase(), { results: [], suggestion: simplifiedQuery, timestamp: Date.now() });
+        } else {
+            console.log(`[Finish] No relevant results found and query cannot be simplified.`);
+            searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
+        }
     }
 });
 
