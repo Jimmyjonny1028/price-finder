@@ -1,4 +1,4 @@
-// server.js (FINAL, Definitive Version with Text Classifier)
+// server.js (FINAL V5, with 2-Stage Filtering)
 
 const express = require('express');
 const cors = require('cors');
@@ -54,25 +54,41 @@ const wss = new WebSocketServer({ server });
 function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueue.length === 0) return; const nextQuery = jobQueue.shift(); workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery })); }
 wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
 
-// --- TEXT CLASSIFICATION ENGINE (V4 - NO PRICE FILTERING) ---
+// --- TEXT CLASSIFICATION & FILTERING ENGINE (V5) ---
 
-// This is our "knowledge base". It contains the log probabilities of a word
-// appearing in an "accessory" title or a "main product" title.
-// Higher numbers mean more likely. Using logs turns multiplication into addition.
+// STAGE 1: Strict Topic Filtering
+/**
+ * Filters results to ensure they contain all essential keywords from the query.
+ * This prevents results for "Samsung 24-inch Monitor" from appearing for a "Samsung S24" search.
+ * @param {Array} results The list of product items.
+ * @param {string} query The user's original search query.
+ * @returns {Array} A filtered list of results that are on-topic.
+ */
+function filterByQueryStrictness(results, query) {
+    // Sanitize and get essential keywords from the query.
+    // We remove common, non-descriptive words.
+    const stopWords = new Set(['a', 'an', 'the', 'in', 'on', 'for', 'with', 'and', 'or']);
+    const queryWords = query.toLowerCase().split(' ').filter(word => word.length > 1 && !stopWords.has(word));
+
+    if (queryWords.length === 0) return results; // Should not happen with valid queries
+
+    return results.filter(item => {
+        const itemTitleLower = item.title.toLowerCase();
+        // Every essential query word must be present in the title.
+        return queryWords.every(word => itemTitleLower.includes(word));
+    });
+}
+
+
+// STAGE 2: Accessory Classification
 const logProbabilities = {
-    // Prior probabilities: Accessories are common, but main products are what we're after.
-    priors: {
-        accessory: Math.log(0.4),
-        main: Math.log(0.6)
-    },
-    // Word probabilities
+    priors: { accessory: Math.log(0.4), main: Math.log(0.6) },
     words: {
-        // --- Strong Accessory Indicators ---
         'case': { accessory: Math.log(0.9), main: Math.log(0.001) },
         'cover': { accessory: Math.log(0.8), main: Math.log(0.001) },
-        'for': { accessory: Math.log(0.7), main: Math.log(0.1) }, // "for" can appear in main titles sometimes
+        'for': { accessory: Math.log(0.7), main: Math.log(0.1) },
         'protector': { accessory: Math.log(0.9), main: Math.log(0.001) },
-        'screen': { accessory: Math.log(0.8), main: Math.log(0.05) }, // e.g., "Screen size"
+        'screen': { accessory: Math.log(0.8), main: Math.log(0.05) },
         'film': { accessory: Math.log(0.8), main: Math.log(0.001) },
         'glass': { accessory: Math.log(0.8), main: Math.log(0.001) },
         'fits': { accessory: Math.log(0.8), main: Math.log(0.001) },
@@ -96,50 +112,34 @@ const logProbabilities = {
         'blade': { accessory: Math.log(0.7), main: Math.log(0.01) },
         'attachment': { accessory: Math.log(0.8), main: Math.log(0.001) },
         'pack': { accessory: Math.log(0.6), main: Math.log(0.05) },
-        // --- Strong Accessory Brands ---
         'otterbox': { accessory: Math.log(0.95), main: Math.log(0.0001) },
         'spigen': { accessory: Math.log(0.95), main: Math.log(0.0001) },
         'zagg': { accessory: Math.log(0.95), main: Math.log(0.0001) },
-        'belkin': { accessory: Math.log(0.9), main: Math.log(0.001) }, // Belkin makes some devices too
-        
-        // --- Strong Main Product Indicators ---
+        'belkin': { accessory: Math.log(0.9), main: Math.log(0.001) },
         'gb': { accessory: Math.log(0.01), main: Math.log(0.8) },
         'tb': { accessory: Math.log(0.01), main: Math.log(0.8) },
         'unlocked': { accessory: Math.log(0.01), main: Math.log(0.7) },
         'console': { accessory: Math.log(0.05), main: Math.log(0.8) },
         'cellular': { accessory: Math.log(0.05), main: Math.log(0.7) },
         'processor': { accessory: Math.log(0.01), main: Math.log(0.6) },
-        'core': { accessory: Math.log(0.1), main: Math.log(0.5) }, // can be "hard-core case"
+        'core': { accessory: Math.log(0.1), main: Math.log(0.5) },
         'inverter': { accessory: Math.log(0.01), main: Math.log(0.8) },
         'brushless': { accessory: Math.log(0.01), main: Math.log(0.8) },
         'engine': { accessory: Math.log(0.01), main: Math.log(0.7) }
     },
-    // Default probability for unknown words (smoothing)
     unknown: { accessory: Math.log(0.01), main: Math.log(0.01) }
 };
-
-/**
- * Classifies a title as 'accessory' or 'main' based on word probabilities.
- * @param {string} title - The product title to classify.
- * @returns {string} - Either 'accessory' or 'main'.
- */
 function classifyTitle(title) {
     let accessoryScore = logProbabilities.priors.accessory;
     let mainScore = logProbabilities.priors.main;
-
     const words = title.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/);
-
     for (const word of words) {
         const probs = logProbabilities.words[word] || logProbabilities.unknown;
         accessoryScore += probs.accessory;
         mainScore += probs.main;
     }
-
-    // Add a slight bias towards classifying as 'main' to reduce false positives
-    // i.e., an accessory needs to be 'confidently' an accessory.
     return accessoryScore > mainScore + Math.log(1.5) ? 'accessory' : 'main';
 }
-
 
 // --- UTILITY FUNCTIONS (unchanged) ---
 const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); const REFURBISHED_KEYWORDS = ['refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new']; return REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword)) ? 'Refurbished' : 'New'; };
@@ -159,20 +159,23 @@ app.post('/submit-results', async (req, res) => {
     if (!query || !results) { return res.status(400).send('Bad Request: Missing query or results.'); }
     res.status(200).send('Results received. Processing now.');
 
-    const pipeline = parsePythonResults(results);
+    let pipeline = parsePythonResults(results);
     console.log(`[Start] Received ${pipeline.length} results from scraper for "${query}".`);
 
-    // Use the new text classifier to filter out accessories.
-    const classifiedResults = pipeline.filter(item => {
+    // STAGE 1: Filter for topic relevance.
+    pipeline = filterByQueryStrictness(pipeline, query);
+    console.log(`[Filter 1] ${pipeline.length} results remain after strict topic filter.`);
+
+    // STAGE 2: Use the text classifier to filter out accessories.
+    pipeline = pipeline.filter(item => {
         const classification = classifyTitle(item.title);
-        // Uncomment the line below for detailed debugging of the classifier
         // console.log(`[Classifier] Title: "${item.title}" -> ${classification.toUpperCase()}`);
         return classification === 'main';
     });
-    console.log(`[Filter] ${classifiedResults.length} relevant results remain after classification.`);
+    console.log(`[Filter 2] ${pipeline.length} results remain after accessory classification.`);
 
-    // Re-sort the final, clean list by price to find the best deals.
-    const processedResults = classifiedResults.sort((a, b) => a.price - b.price);
+    // Final Step: Sort the clean list by price to find the best deals.
+    const processedResults = pipeline.sort((a, b) => a.price - b.price);
     console.log(`[Sort] Final results have been sorted by price (low to high).`);
 
     if (processedResults.length > 0) {
