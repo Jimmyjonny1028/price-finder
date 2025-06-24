@@ -1,6 +1,6 @@
-// public/script.js (FINAL, with all features and fixes)
+// public/script.js (FINAL, with data display fix)
 
-// --- Element Selection ---
+// --- Element Selection (Complete) ---
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
 const searchButton = document.getElementById('search-button');
@@ -17,8 +17,6 @@ const storeSelectAllButton = document.getElementById('store-select-all-button');
 const storeUnselectAllButton = document.getElementById('store-unselect-all-button');
 const permanentMessageBanner = document.getElementById('permanent-message-banner');
 const themeNotificationEl = document.getElementById('theme-notification');
-
-// --- Admin Panel Element Selection (Complete) ---
 const adminButton = document.getElementById('admin-button');
 const adminPanel = document.getElementById('admin-panel');
 const closeAdminPanel = document.getElementById('close-admin-panel');
@@ -91,7 +89,6 @@ async function handleSearch(event, suggestedQuery = null) {
         return;
     }
 
-    // Only update the input bar visually if it's a new search from the user
     if (!suggestedQuery) {
         searchInput.value = searchTerm;
     }
@@ -118,14 +115,18 @@ async function handleSearch(event, suggestedQuery = null) {
             pollForResults(searchTerm);
             return;
         }
-        const data = await response.json();
+        const data = await response.json(); // Data from initial cache hit
         processResults(data, searchTerm);
     } catch (error) {
         console.error("Failed to fetch data:", error);
         showGenericError();
-        searchButton.disabled = false;
-        loader.classList.add('hidden');
-        clearInterval(loadingInterval);
+    } finally {
+        // This block only runs if the search was NOT queued for polling
+        if (!loader.classList.contains('polling')) {
+            searchButton.disabled = false;
+            loader.classList.add('hidden');
+            clearInterval(loadingInterval);
+        }
     }
 }
 
@@ -170,15 +171,22 @@ function pollForResults(query, attempt = 1) {
 }
 
 function processResults(data, query) {
-    if (data.results.length === 0 && data.suggestion) {
-        resultsContainer.innerHTML = `<p>No deals found for "${query}". Trying a broader search for "${data.suggestion}"...</p>`;
+    // --- THE FIX IS HERE ---
+    // The server sends the array directly for cache hits and final results.
+    // We check if data has a .results property (for suggestion objects) or use data itself.
+    const results = data.results || data;
+    const suggestion = data.suggestion;
+
+    if (results.length === 0 && suggestion) {
+        resultsContainer.innerHTML = `<p>No deals found for "${query}". Trying a broader search for "${suggestion}"...</p>`;
         setTimeout(() => {
-            handleSearch(null, data.suggestion);
+            handleSearch(null, suggestion);
         }, 2000);
         return;
     }
 
-    fullResults = data.results || [];
+    fullResults = Array.isArray(results) ? results : [];
+    
     if (fullResults.length === 0) {
         showGenericError();
     } else {
