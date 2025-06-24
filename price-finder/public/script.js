@@ -1,233 +1,218 @@
-// server.js (FINAL V18, with Dynamic Query Suggestion)
+// public/script.js (FINAL, with all features and fixes)
 
-const express = require('express');
-const cors = require('cors');
-require('dotenv').config();
-const http = require('http');
-const { WebSocketServer } = require('ws');
-const url = require('url');
-const axios = require('axios');
-const fs = require('fs').promises;
-const path = require('path');
+// --- Element Selection (Complete) ---
+const searchForm = document.getElementById('search-form');
+const searchInput = document.getElementById('search-input');
+const searchButton = document.getElementById('search-button');
+const resultsContainer = document.getElementById('results-container');
+const loader = document.getElementById('loader');
+const loaderText = document.querySelector('#loader p');
+const controlsContainer = document.getElementById('controls-container');
+const sortSelect = document.getElementById('sort-select');
+const conditionFilterSelect = document.getElementById('condition-filter-select');
+const storeFilterButton = document.getElementById('store-filter-button');
+const storeFilterPanel = document.getElementById('store-filter-panel');
+const storeFilterList = document.getElementById('store-filter-list');
+const storeSelectAllButton = document.getElementById('store-select-all-button');
+const storeUnselectAllButton = document.getElementById('store-unselect-all-button');
+const permanentMessageBanner = document.getElementById('permanent-message-banner');
+const themeNotificationEl = document.getElementById('theme-notification');
+const adminButton = document.getElementById('admin-button');
+const adminPanel = document.getElementById('admin-panel');
+const closeAdminPanel = document.getElementById('close-admin-panel');
+const totalSearchesEl = document.getElementById('total-searches');
+const uniqueVisitorsEl = document.getElementById('unique-visitors');
+const usersOnlineEl = document.getElementById('users-online');
+const searchHistoryListEl = document.getElementById('search-history-list');
+const maintenanceStatusEl = document.getElementById('maintenance-status');
+const workerStatusEl = document.getElementById('worker-status');
+const activeJobsCountEl = document.getElementById('active-jobs-count');
+const activeJobsListEl = document.getElementById('active-jobs-list');
+const jobQueueCountEl = document.getElementById('job-queue-count');
+const jobQueueListEl = document.getElementById('job-queue-list');
+const queueStatusEl = document.getElementById('queue-status');
+const imageCacheSizeEl = document.getElementById('image-cache-size');
+const toggleMaintenanceButton = document.getElementById('toggle-maintenance-button');
+const clearFullCacheButton = document.getElementById('clear-full-cache-button');
+const singleCacheClearForm = document.getElementById('single-cache-clear-form');
+const singleCacheInput = document.getElementById('single-cache-input');
+const toggleQueueButton = document.getElementById('toggle-queue-button');
+const disconnectWorkerButton = document.getElementById('disconnect-worker-button');
+const clearQueueButton = document.getElementById('clear-queue-button');
+const clearImageCacheButton = document.getElementById('clear-image-cache-button');
+const clearStatsButton = document.getElementById('clear-stats-button');
+const makeItRainButton = document.getElementById('make-it-rain-button');
+const currentThemeDisplay = document.getElementById('current-theme-display');
+const topSearchesListEl = document.getElementById('top-searches-list');
+const adminPermanentMessageForm = document.getElementById('permanent-message-form');
+const adminPermanentMessageInput = document.getElementById('permanent-message-input');
+const adminClearPermanentMessageButton = document.getElementById('clear-permanent-message-button');
+const adminFlashMessageForm = document.getElementById('flash-message-form');
+const adminFlashMessageInput = document.getElementById('flash-message-input');
 
-const app = express();
-const PORT = 5000;
-const server = http.createServer(app);
+// --- Global State ---
+let fullResults = [];
+let availableStores = [];
+let selectedStores = new Set();
+let loadingInterval;
+const loadingMessages = [ "Contacting local scraper...", "Searching retailers...", "Analyzing search results...", "Compiling the best deals...", "This may take a minute...", "Almost finished..." ];
+let currentLocalTheme = 'default';
+let lastSeenRainEvent = 0;
+let lastSeenFlashTimestamp = 0;
+let notificationTimeout;
+let currentAdminCode = null;
 
-let limit;
-
-// Caches and State
-const searchCache = new Map();
-let imageCache = new Map();
-const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
-const searchTermFrequency = new Map();
-const CACHE_DURATION_MS = 60 * 60 * 1000;
-const MAX_HISTORY = 50;
-const onlineUserTimeouts = new Map();
-const USER_ONLINE_TIMEOUT_MS = 65 * 1000;
-let isQueueProcessingPaused = false;
-let isMaintenanceModeEnabled = false;
-
-let liveState = {
-    theme: 'default',
-    rainEventTimestamp: 0,
-    onlineUsers: 0,
-    permanentMessage: "",
-    flashMessage: { text: "", timestamp: 0 }
-};
-const IMAGE_CACHE_PATH = path.join(__dirname, 'image_cache.json');
-const LIVE_STATE_PATH = path.join(__dirname, 'public', 'live_state.json');
-
-// --- APP & MIDDLEWARE SETUP ---
-app.use(express.json({ limit: '10mb' }));
-app.use(cors());
-app.use(express.static('public'));
-
-// --- CONSTANTS ---
-const ADMIN_CODE = process.env.ADMIN_CODE;
-const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
-const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID;
-
-const CORE_ENTITIES = {
-    'xbox': { positive: ['console', 'series x', 'series s', '1tb', '2tb', '512gb'], negative: ['controller', 'headset', 'game drive', 'for xbox', 'wired', 'wireless headset', 'play and charge', 'chat link', 'game', 'steering wheel', 'racing wheel', 'flightstick', 'sofa', 'expansion card', 'arcade stick'] },
-    'nintendo switch': { positive: ['console', 'oled model', 'lite'], negative: ['game', 'controller', 'case', 'grip', 'dock', 'ac adaptor', 'memory card', 'travel bag', 'joy-con', 'charging grip', 'sports', 'kart', 'zelda', 'mario', 'pokemon', 'animal crossing'] },
-    'playstation': { positive: ['console', 'ps5', 'ps4', 'slim', 'pro', '1tb', '825gb'], negative: ['controller', 'headset', 'dual sense', 'game', 'vr', 'camera', 'for playstation', 'pulse 3d'] }
-};
-const GENERIC_ACCESSORY_BRANDS = ['uag', 'otterbox', 'spigen', 'zagg', 'mophie', 'lifeproof', 'incipio', 'tech21', 'cygnett', 'efm', '3sixt', 'belkin', 'smallrig', 'stm', 'dbramante1928', 'razer', 'hyperx', 'logitech', 'steelseries', 'turtle beach', 'astro', 'powera', '8bitdo', 'gamesir'];
-const GENERIC_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control'];
-const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe', 'remote', 'remote control', 'controller', 'headset'];
-
-// --- HELPER FUNCTIONS ---
-
-// State & File Management
-async function updateLiveStateFile() { liveState.onlineUsers = onlineUserTimeouts.size; try { await fs.writeFile(LIVE_STATE_PATH, JSON.stringify(liveState, null, 2), 'utf8'); } catch (error) { console.error('Error writing live state file:', error); } }
-async function loadImageCacheFromFile() { try { await fs.access(IMAGE_CACHE_PATH); const data = await fs.readFile(IMAGE_CACHE_PATH, 'utf8'); const plainObject = JSON.parse(data); imageCache = new Map(Object.entries(plainObject)); console.log(`✅ Permanent image cache loaded successfully from ${IMAGE_CACHE_PATH}`); } catch (error) { if (error.code === 'ENOENT') { console.log('Image cache file not found. A new one will be created when needed.'); } else { console.error('Error loading image cache from file:', error); } imageCache = new Map(); } }
-async function saveImageCacheToFile() { try { const plainObject = Object.fromEntries(imageCache); const jsonString = JSON.stringify(plainObject, null, 2); await fs.writeFile(IMAGE_CACHE_PATH, jsonString, 'utf8'); } catch (error) { console.error('Error saving image cache to file:', error); } }
-
-// Backup API Logic
-let lastOzbargainCallTimestamp = 0;
-const OZbARGAIN_COOLDOWN_MS = 60 * 1000;
-async function fetchOzbargainBackup(query) {
-    const now = Date.now();
-    if (now - lastOzbargainCallTimestamp < OZbARGAIN_COOLDOWN_MS) {
-        console.log('[Backup] OzBargain API is on cooldown. Skipping call.');
-        return [];
-    }
-    const my_user_agent = "AussieDealTracker/1.0 (Personal project; contact: sam555666@icloud.com)";
-    const headers = { 'User-Agent': my_user_agent };
-    const api_url = "https://www.ozbargain.com.au/api/live?source=web";
-    console.log('[Backup] Calling OzBargain API...');
-    lastOzbargainCallTimestamp = now;
-    try {
-        const response = await axios.get(api_url, { headers, responseType: 'text' });
-        const jsonText = response.data.replace(/^ozb_callback\(|\)$/g, '');
-        const data = JSON.parse(jsonText);
-        if (!data.records || data.records.length === 0) return [];
-        const queryWords = query.toLowerCase().split(' ').filter(w => w.length > 1);
-        return data.records.filter(record => {
-            const titleLower = record.title.toLowerCase();
-            return queryWords.every(word => titleLower.includes(word));
-        }).map(record => {
-            let price = null, price_string = null, store = 'OzBargain';
-            const priceMatch = record.title.match(/\$(\d+\.?\d*)/);
-            if (priceMatch) { price = parseFloat(priceMatch[1]); price_string = priceMatch[0]; }
-            const storeMatch = record.title.match(/@\s*(.+)/);
-            if (storeMatch) { store = storeMatch[1].trim(); }
-            return { title: record.title, price, price_string, store, url: `https://www.ozbargain.com.au${record.url}`, source: 'OzBargain' };
-        }).filter(item => item.price !== null);
-    } catch (error) {
-        console.error('[Backup] Error fetching or parsing OzBargain data:', error.message);
-        return [];
-    }
-}
-
-// Search & Filtering Logic
-function simplifyQuery(query) {
-    const words = query.split(' ');
-    if (words.length <= 2) return null;
-    let lastCoreWordIndex = -1;
-    words.forEach((word, index) => { if (/\d/.test(word)) { lastCoreWordIndex = index; } });
-    if (lastCoreWordIndex > 0) {
-        const simplified = words.slice(0, lastCoreWordIndex + 1).join(' ');
-        return simplified !== query ? simplified : null;
-    }
-    const simplified = words.slice(0, 2).join(' ');
-    return simplified !== query ? simplified : null;
-}
-function getQueryIntent(query) { const lowerQuery = query.toLowerCase(); if (INTENT_ACCESSORY_KEYWORDS.some(keyword => lowerQuery.includes(keyword))) return 'FIND_ACCESSORY'; return 'FIND_MAIN_PRODUCT'; }
-function filterByQueryStrictness(results, query) {
-    const stopWords = new Set(['a', 'an', 'the', 'in', 'on', 'for', 'with', 'and', 'or']);
-    const queryWords = query.toLowerCase().split(' ').filter(word => word.length > 1 && !stopWords.has(word)).map(word => word.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
-    if (queryWords.length === 0) return results;
-    const regexes = queryWords.map(word => new RegExp(`\\b${word}\\b`, 'i'));
-    return results.filter(item => regexes.every(regex => regex.test(item.title)));
-}
-function calculateScore(title, query) {
-    const lowerTitle = title.toLowerCase();
-    const lowerQuery = query.toLowerCase();
-    let score = 0;
-    const matchedEntity = Object.keys(CORE_ENTITIES).find(key => lowerQuery.includes(key));
-    if (matchedEntity) {
-        const entityRules = CORE_ENTITIES[matchedEntity];
-        if (entityRules.positive.some(term => lowerTitle.includes(term))) score += 100;
-        if (entityRules.negative.some(term => lowerTitle.includes(term))) score -= 50;
-        if (lowerTitle.split(' ').length < 7) score += 20;
-    } else {
-        if (GENERIC_ACCESSORY_BRANDS.some(brand => lowerTitle.includes(brand))) score -= 100;
-        if (GENERIC_ACCESSORY_KEYWORDS.some(keyword => lowerTitle.includes(keyword))) score -= 100;
-    }
-    return score;
-}
-
-// Result Parsing & Enrichment
-const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); const REFURBISHED_KEYWORDS = ['refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new']; return REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword)) ? 'Refurbished' : 'New'; };
-const extractColorFromTitle = (title) => { const lowerCaseTitle = title.toLowerCase(); const COLOR_LIST = ['black', 'white', 'silver', 'gold', 'gray', 'blue', 'red', 'green', 'pink', 'purple', 'yellow', 'orange', 'bronze', 'graphite', 'sierra', 'alpine', 'starlight', 'midnight']; for (const color of COLOR_LIST) { if (lowerCaseTitle.includes(color)) return color; } return null; };
-function parsePythonResults(results) { return results.map(item => { const fullText = item.title; const priceMatch = fullText.match(/\$\s?[\d,]+(\.\d{2})?/); const priceString = priceMatch ? priceMatch[0] : null; const price = priceString ? parseFloat(priceString.replace(/[^0-9.]/g, '')) : null; if (!price) return null; const store = fullText.split(' ')[0]; return { title: fullText, price: price, price_string: priceString, store: store, url: item.url || '#' }; }).filter(Boolean); }
-async function enrichResultsWithImages(results, baseQuery) { if (results.length === 0) return results; const defaultImageUrl = await fetchImageForQuery(baseQuery); const uniqueColors = new Set(results.map(result => extractColorFromTitle(result.title)).filter(Boolean)); const colorsToFetch = Array.from(uniqueColors).slice(0, 2); const colorImageMap = new Map(); if (colorsToFetch.length > 0) { console.log(`Enriching with up to 2 extra color-specific images for: ${colorsToFetch.join(', ')}`); } await Promise.all(colorsToFetch.map(async (color) => { const specificQuery = `${baseQuery} ${color}`; const imageUrl = await fetchImageForQuery(specificQuery); colorImageMap.set(color, imageUrl); })); results.forEach(result => { const color = extractColorFromTitle(result.title); result.image = colorImageMap.get(color) || defaultImageUrl; }); return results; }
-async function fetchImageForQuery(query) { const cacheKey = query.toLowerCase(); if (imageCache.has(cacheKey)) { return imageCache.get(cacheKey); } const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A'; if (!GOOGLE_API_KEY || !GOOGLE_CSE_ID) { return placeholder; } try { const response = await limit(() => { const url = `https://www.googleapis.com/customsearch/v1`; const params = { key: GOOGLE_API_KEY, cx: GOOGLE_CSE_ID, q: query, searchType: 'image', num: 1 }; return axios.get(url, { params }); }); const imageUrl = response.data.items?.[0]?.link || placeholder; imageCache.set(cacheKey, imageUrl); await saveImageCacheToFile(); return imageUrl; } catch (error) { console.error(`[FATAL] Google Image Search request failed for query: "${query}"`); if (error.response) { console.error('Error Data:', JSON.stringify(error.response.data, null, 2)); } else { console.error('Error Message:', error.message); } return placeholder; } }
-
-// --- WebSocket Setup ---
-const wss = new WebSocketServer({ server });
-const jobQueue = [];
-let workerSocket = null;
-let workerActiveJobs = new Set();
-function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueue.length === 0) return; const nextQuery = jobQueue.shift(); workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery })); }
-wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
-
-// --- API ENDPOINTS ---
-app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } const normalizedQuery = query.toLowerCase().trim(); if (normalizedQuery) { const currentCount = searchTermFrequency.get(normalizedQuery) || 0; searchTermFrequency.set(normalizedQuery, currentCount + 1); } } catch (e) { console.error("Error logging traffic:", e); } const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
-app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey)); } else { return res.status(202).send(); }});
-
-app.post('/submit-results', async (req, res) => {
-    const { secret, query, results } = req.body;
-    if (secret !== SERVER_SIDE_SECRET) { return res.status(403).send('Forbidden'); }
-    if (!query || !results) { return res.status(400).send('Bad Request: Missing query or results.'); }
-    res.status(200).send('Results received. Processing now.');
-
-    let pipeline = parsePythonResults(results);
-    console.log(`[Start] Received ${pipeline.length} results from scraper for "${query}".`);
-
-    if (pipeline.length === 0) {
-        pipeline = await fetchOzbargainBackup(query);
-        if (pipeline.length > 0) console.log(`[Backup] Found ${pipeline.length} potential deals on OzBargain.`);
-        else console.log(`[Backup] OzBargain backup found no results or is on cooldown.`);
-    }
-
-    const intent = getQueryIntent(query);
-    console.log(`[Intent Analysis] Detected intent: ${intent}`);
-    pipeline = filterByQueryStrictness(pipeline, query);
-    console.log(`[Filter 1] ${pipeline.length} results remain after strict topic filter.`);
-    let scoredPipeline = pipeline.map(item => ({ ...item, score: calculateScore(item.title, query) }));
-    if (intent === 'FIND_MAIN_PRODUCT') {
-        scoredPipeline = scoredPipeline.filter(item => item.score >= 0);
-        console.log(`[Filter 2] ${scoredPipeline.length} results remain after main product scoring filter.`);
-    }
-    const processedResults = scoredPipeline.sort((a, b) => {
-        if (a.score !== b.score) return b.score - a.score;
-        return a.price - b.price;
-    });
-    console.log(`[Sort] Final results have been intelligently sorted by relevance and price.`);
-
-    if (processedResults.length > 0) {
-        const finalResults = await enrichResultsWithImages(processedResults, query).then(res => res.map(item => ({ ...item, condition: detectItemCondition(item.title) })));
-        searchCache.set(query.toLowerCase(), { results: finalResults, timestamp: Date.now() });
-        console.log(`[Success] Processed and cached ${finalResults.length} deals for "${query}".`);
-    } else {
-        const simplifiedQuery = simplifyQuery(query);
-        if (simplifiedQuery) {
-            console.log(`[Suggestion] No results found. Suggesting simplified query: "${simplifiedQuery}"`);
-            searchCache.set(query.toLowerCase(), { results: [], suggestion: simplifiedQuery, timestamp: Date.now() });
-        } else {
-            console.log(`[Finish] No relevant results found and query cannot be simplified.`);
-            searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
-        }
+// --- Main Event Listeners ---
+searchForm.addEventListener('submit', handleSearch);
+resultsContainer.addEventListener('click', (event) => {
+    if (event.target.classList.contains('suggestion-link')) {
+        event.preventDefault();
+        searchInput.value = event.target.textContent;
+        handleSearch(new Event('submit'));
     }
 });
+sortSelect.addEventListener('change', applyFiltersAndSort);
+conditionFilterSelect.addEventListener('change', applyFiltersAndSort);
+storeFilterButton.addEventListener('click', () => { storeFilterPanel.classList.toggle('hidden'); });
+storeSelectAllButton.addEventListener('click', () => { updateAllCheckboxes(true); });
+storeUnselectAllButton.addEventListener('click', () => { updateAllCheckboxes(false); });
+storeFilterList.addEventListener('change', (event) => { if (event.target.type === 'checkbox') { const store = event.target.dataset.store; if (event.target.checked) { selectedStores.add(store); } else { selectedStores.delete(store); } updateStoreFilterButtonText(); applyFiltersAndSort(); } });
+document.addEventListener('click', (event) => { if (!storeFilterButton.contains(event.target) && !storeFilterPanel.contains(event.target)) { storeFilterPanel.classList.add('hidden'); } });
+adminButton.addEventListener('click', () => { const code = prompt("Please enter the admin code:"); if (code) { fetchAdminData(code); } });
+closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'none'; });
+adminPanel.addEventListener('click', (event) => { if (event.target === adminPanel) { adminPanel.style.display = 'none'; } });
 
-// Admin Endpoints
-app.post('/api/ping', (req, res) => { const { sessionID } = req.body; if (!sessionID) return res.status(400).send(); if (onlineUserTimeouts.has(sessionID)) { clearTimeout(onlineUserTimeouts.get(sessionID)); } const timeoutID = setTimeout(() => { onlineUserTimeouts.delete(sessionID); updateLiveStateFile(); }, USER_ONLINE_TIMEOUT_MS); onlineUserTimeouts.set(sessionID, timeoutID); updateLiveStateFile(); res.status(200).json({ status: 'ok' }); });
-app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const topSearches = [...searchTermFrequency.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([term, count]) => ({ term, count })); res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory, isServiceDisabled: isMaintenanceModeEnabled, workerStatus: workerSocket ? 'Connected' : 'Disconnected', activeJobs: Array.from(workerActiveJobs), jobQueue: jobQueue, isQueuePaused: isQueueProcessingPaused, imageCacheSize: imageCache.size, currentTheme: liveState.theme, onlineUsers: liveState.onlineUsers, topSearches: topSearches }); });
-app.post('/admin/toggle-maintenance', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } isMaintenanceModeEnabled = !isMaintenanceModeEnabled; const message = `Service has been ${isMaintenanceModeEnabled ? 'DISABLED' : 'ENABLED'}.`; console.log(`MAINTENANCE MODE: ${message}`); res.json({ isServiceDisabled: isMaintenanceModeEnabled, message: message }); });
-app.post('/admin/clear-cache', (req, res) => { const { code, query } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } if (query) { const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { searchCache.delete(cacheKey); console.log(`ADMIN ACTION: Cleared cache for "${query}".`); res.status(200).json({ message: `Cache for "${query}" has been cleared.` }); } else { res.status(404).json({ message: `No cache entry found for "${query}".` }); } } else { searchCache.clear(); console.log("ADMIN ACTION: Full search cache has been cleared."); res.status(200).json({ message: 'Full search cache has been cleared successfully.' }); } });
-app.post('/admin/toggle-queue', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); isQueueProcessingPaused = !isQueueProcessingPaused; const message = `Job queue processing has been ${isQueueProcessingPaused ? 'PAUSED' : 'RESUMED'}.`; console.log(`ADMIN ACTION: ${message}`); if (!isQueueProcessingPaused) dispatchJob(); res.json({ isQueuePaused: isQueueProcessingPaused, message }); });
-app.post('/admin/clear-queue', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); jobQueue.length = 0; console.log("ADMIN ACTION: Job queue has been cleared."); res.json({ message: 'Job queue has been cleared successfully.' }); });
-app.post('/admin/disconnect-worker', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); if (workerSocket) { workerSocket.close(); console.log("ADMIN ACTION: Forcibly disconnected the worker."); res.json({ message: 'Worker has been disconnected.' }); } else { res.status(404).json({ message: 'No worker is currently connected.' }); } });
-app.post('/admin/clear-image-cache', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); imageCache.clear(); await saveImageCacheToFile(); console.log("ADMIN ACTION: Permanent image cache has been cleared."); res.json({ message: 'The permanent image cache has been cleared.' }); });
-app.post('/admin/clear-stats', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); trafficLog.totalSearches = 0; trafficLog.uniqueVisitors.clear(); trafficLog.searchHistory = []; searchTermFrequency.clear(); console.log("ADMIN ACTION: All traffic stats and search history have been cleared."); res.json({ message: 'All traffic stats and search history have been cleared.' }); });
-app.post('/admin/set-theme', async (req, res) => { const { code, theme } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const validThemes = ['default', 'dark', 'retro', 'sepia', 'solarized', 'synthwave']; if (theme && validThemes.includes(theme)) { liveState.theme = theme; await updateLiveStateFile(); console.log(`ADMIN ACTION: Global theme changed to "${theme}".`); res.json({ message: `Theme changed to ${theme}.` }); } else { res.status(400).json({ error: 'Invalid theme specified.' }); } });
-app.post('/admin/trigger-rain', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); liveState.rainEventTimestamp = Date.now(); await updateLiveStateFile(); console.log("ADMIN ACTION: Triggered global 'Make It Rain' event."); res.json({ message: 'Rain event triggered for all active users.' }); });
-app.post('/admin/set-permanent-message', async (req, res) => { const { code, message } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); liveState.permanentMessage = message; await updateLiveStateFile(); console.log(`ADMIN ACTION: Permanent message has been set.`); res.json({ message: `Permanent message has been set.` }); });
-app.post('/admin/clear-permanent-message', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); liveState.permanentMessage = ""; await updateLiveStateFile(); console.log(`ADMIN ACTION: Permanent message has been cleared.`); res.json({ message: `Permanent message has been cleared.` }); });
-app.post('/admin/flash-message', async (req, res) => { const { code, message } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); if (!message) return res.status(400).json({ error: 'Message text is required.' }); liveState.flashMessage = { text: message, timestamp: Date.now() }; await updateLiveStateFile(); console.log(`ADMIN ACTION: Sent flash message: "${message}"`); res.json({ message: 'Flash message sent to all active users.' }); });
-
-// --- SERVER INITIALIZATION ---
-async function startServer() {
-    const pLimitModule = await import('p-limit');
-    limit = pLimitModule.default(2);
-    await loadImageCacheFromFile();
-    await updateLiveStateFile();
-    server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+// --- Core Application Logic ---
+function showFailureMessage(originalQuery, suggestion = null) {
+    let message = `<p>Sorry! Our database doesnt currently contain this product or a error has occured please try again later.</p>`;
+    if (suggestion && originalQuery) {
+        const suggestionLink = `<a href="#" class="suggestion-link">${suggestion}</a>`;
+        message += `<p style="margin-top: 15px;">Maybe try just searching the model. <br>I.e. "${originalQuery}" becomes ${suggestionLink}.</p>`;
+    }
+    resultsContainer.innerHTML = message;
 }
 
-startServer();
+async function handleSearch(event) {
+    if (event) event.preventDefault();
+    const searchTerm = searchInput.value.trim();
+    if (!searchTerm) {
+        resultsContainer.innerHTML = '<p>Please enter a product to search for.</p>';
+        return;
+    }
+    searchButton.disabled = true;
+    controlsContainer.style.display = 'none';
+    resultsContainer.innerHTML = '';
+    let messageIndex = 0;
+    loaderText.textContent = loadingMessages[messageIndex];
+    loader.classList.remove('hidden');
+    loader.classList.remove('polling');
+    if (loadingInterval) clearInterval(loadingInterval);
+    loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000);
+    try {
+        const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`);
+        if (!response.ok) { throw new Error('Server search request failed.'); }
+        if (response.status === 202) {
+            loader.classList.add('polling');
+            pollForResults(searchTerm);
+            return;
+        }
+        const data = await response.json();
+        processResults(data, searchTerm);
+    } catch (error) {
+        console.error("Failed to fetch data:", error);
+        showFailureMessage(searchTerm);
+    } finally {
+        if (!loader.classList.contains('polling')) {
+            searchButton.disabled = false;
+            loader.classList.add('hidden');
+            clearInterval(loadingInterval);
+        }
+    }
+}
+
+function pollForResults(query, attempt = 1) {
+    const maxAttempts = 60;
+    const interval = 5000;
+    if (attempt > maxAttempts) {
+        loader.classList.remove('polling');
+        loader.classList.add('hidden');
+        showFailureMessage(query);
+        searchButton.disabled = false;
+        clearInterval(loadingInterval);
+        return;
+    }
+    fetch(`/results/${encodeURIComponent(query)}`).then(res => {
+        if (res.status === 200) return res.json();
+        if (res.status === 202) { setTimeout(() => pollForResults(query, attempt + 1), interval); return null; }
+        throw new Error('Server returned an error during polling.');
+    }).then(data => {
+        if (data) {
+            console.log("Polling successful. Received final data object.");
+            loader.classList.remove('polling');
+            loader.classList.add('hidden');
+            searchButton.disabled = false;
+            clearInterval(loadingInterval);
+            processResults(data, query);
+        }
+    }).catch(error => {
+        console.error("Polling failed:", error);
+        loader.classList.remove('polling');
+        loader.classList.add('hidden');
+        showFailureMessage(query);
+        searchButton.disabled = false;
+        clearInterval(loadingInterval);
+    });
+}
+
+function processResults(data, query) {
+    // This now correctly handles the two types of responses from the server:
+    // 1. A direct array of results: `[...]`
+    // 2. An object with a suggestion: `{ results: [], suggestion: '...' }`
+    fullResults = data.results || (Array.isArray(data) ? data : []);
+    const suggestion = data.suggestion;
+
+    if (fullResults.length === 0) {
+        showFailureMessage(query, suggestion || null);
+    } else {
+        populateAndShowControls();
+        applyFiltersAndSort();
+    }
+}
+
+function applyFiltersAndSort() { const sortBy = sortSelect.value; const conditionFilter = conditionFilterSelect.value; let processedResults = [...fullResults]; if (conditionFilter === 'new') { processedResults = processedResults.filter(item => item.condition === 'New'); } else if (conditionFilter === 'refurbished') { processedResults = processedResults.filter(item => item.condition === 'Refurbished'); } if (selectedStores.size > 0 && selectedStores.size < availableStores.length) { processedResults = processedResults.filter(item => selectedStores.has(item.store)); } if (sortBy === 'price-asc') { processedResults.sort((a, b) => a.price - b.price); } else if (sortBy === 'price-desc') { processedResults.sort((a, b) => b.price - a.price); } renderResults(processedResults); }
+function populateAndShowControls() { sortSelect.value = 'price-asc'; conditionFilterSelect.value = 'all'; availableStores = [...new Set(fullResults.map(item => item.store))].sort(); storeFilterList.innerHTML = ''; selectedStores.clear(); availableStores.forEach(store => { const li = document.createElement('li'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.id = `store-${store}`; checkbox.dataset.store = store; checkbox.checked = true; const label = document.createElement('label'); label.htmlFor = `store-${store}`; label.textContent = store; li.appendChild(checkbox); li.appendChild(label); storeFilterList.appendChild(li); selectedStores.add(store); }); updateStoreFilterButtonText(); controlsContainer.style.display = 'flex'; }
+function updateStoreFilterButtonText() { if (selectedStores.size === availableStores.length) { storeFilterButton.textContent = 'All Stores'; } else if (selectedStores.size === 0) { storeFilterButton.textContent = 'No Stores Selected'; } else if (selectedStores.size === 1) { storeFilterButton.textContent = `${selectedStores.values().next().value}`; } else { storeFilterButton.textContent = `${selectedStores.size} Stores Selected`; } }
+function updateAllCheckboxes(checked) { document.querySelectorAll('#store-filter-list input[type="checkbox"]').forEach(cb => { cb.checked = checked; if (checked) { selectedStores.add(cb.dataset.store); } else { selectedStores.clear(); } }); updateStoreFilterButtonText(); applyFiltersAndSort(); }
+function renderResults(results) { resultsContainer.innerHTML = `<h2>Best Prices for ${searchInput.value.trim()}</h2>`; if (results.length === 0) { resultsContainer.innerHTML += `<p>No results match the current filters.</p>`; return; } results.forEach(offer => { const card = document.createElement('div'); card.className = 'result-card'; const isLinkValid = offer.url && offer.url !== '#'; const linkAttributes = isLinkValid ? `href="${offer.url}" target="_blank" rel="noopener noreferrer"` : `href="#" class="disabled-link"`; const conditionBadge = offer.condition === 'Refurbished' ? `<span class="condition-badge">Refurbished</span>` : ''; card.innerHTML = ` <div class="result-image"> <img src="${offer.image}" alt="${offer.title}" onerror="this.style.display='none';"> </div> <div class="result-info"> <h3>${offer.title}</h3> <p>Sold by: <strong>${offer.store}</strong> ${conditionBadge}</p> </div> <div class="result-price"> <a ${linkAttributes}> ${offer.price_string} </a> </div> `; resultsContainer.appendChild(card); }); }
+// --- "Fun" and Real-time Features ---
+function makeItRain() { const rainContainer = document.body; for (let i = 0; i < 40; i++) { const money = document.createElement('span'); money.textContent = '💰'; money.style.position = 'fixed'; money.style.top = `${Math.random() * -20}vh`; money.style.left = `${Math.random() * 100}vw`; money.style.fontSize = `${Math.random() * 2 + 1}rem`; money.style.zIndex = '9999'; money.style.transition = 'top 2s ease-in, transform 2s ease-in-out'; money.style.pointerEvents = 'none'; rainContainer.appendChild(money); setTimeout(() => { money.style.top = '110vh'; money.style.transform = `rotate(${Math.random() * 720}deg)`; }, 10); setTimeout(() => { money.remove(); }, 2100); } }
+function showFlashMessage(message, duration = 10000) { themeNotificationEl.innerHTML = `<b>${message}</b>`; themeNotificationEl.classList.remove('hidden'); if (notificationTimeout) clearTimeout(notificationTimeout); notificationTimeout = setTimeout(() => { themeNotificationEl.classList.add('hidden'); }, duration); }
+async function pollForLiveState() { try { const response = await fetch(`/live_state.json?t=${Date.now()}`); if (!response.ok) return; const data = await response.json(); if (data.permanentMessage) { permanentMessageBanner.textContent = data.permanentMessage; permanentMessageBanner.classList.remove('hidden'); } else { permanentMessageBanner.classList.add('hidden'); } if (data.flashMessage && data.flashMessage.timestamp > lastSeenFlashTimestamp) { showFlashMessage(data.flashMessage.text); lastSeenFlashTimestamp = data.flashMessage.timestamp; } if (data.theme && data.theme !== currentLocalTheme) { applyTheme(data.theme, true); } if (data.rainEventTimestamp && data.rainEventTimestamp > lastSeenRainEvent) { makeItRain(); lastSeenRainEvent = data.rainEventTimestamp; } } catch (error) { console.error("Live state poll failed:", error); } }
+function applyTheme(themeName, showNotification = false) { document.body.classList.remove('theme-default', 'theme-dark', 'theme-retro', 'theme-sepia', 'theme-solarized', 'theme-synthwave'); document.body.classList.add(`theme-${themeName}`); currentLocalTheme = themeName; if (showNotification) { showFlashMessage(`Theme changed to: ${themeName.charAt(0).toUpperCase() + themeName.slice(1)}`, 2000); } }
+async function initializeState() { try { const response = await fetch(`/live_state.json?t=${Date.now()}`); if (!response.ok) return; const data = await response.json(); if (data.permanentMessage) { permanentMessageBanner.textContent = data.permanentMessage; permanentMessageBanner.classList.remove('hidden'); } if (data.flashMessage) lastSeenFlashTimestamp = data.flashMessage.timestamp; if (data.theme) applyTheme(data.theme, false); if (data.rainEventTimestamp) lastSeenRainEvent = data.rainEventTimestamp; } catch (error) { console.error("Failed to initialize live state:", error); } finally { setInterval(pollForLiveState, 5000); } }
+initializeState();
+
+// --- ADMIN PANEL EVENT LISTENERS ---
+adminPermanentMessageForm.addEventListener('submit', (e) => { e.preventDefault(); setPermanentMessage(adminPermanentMessageInput.value); });
+adminClearPermanentMessageButton.addEventListener('click', clearPermanentMessage);
+adminFlashMessageForm.addEventListener('submit', (e) => { e.preventDefault(); sendFlashMessage(adminFlashMessageInput.value); });
+toggleMaintenanceButton.addEventListener('click', () => performAdminAction('/admin/toggle-maintenance', 'toggle maintenance'));
+clearFullCacheButton.addEventListener('click', () => clearCache(true));
+singleCacheClearForm.addEventListener('submit', (e) => { e.preventDefault(); clearCache(false); });
+toggleQueueButton.addEventListener('click', () => performAdminAction('/admin/toggle-queue', 'toggle queue'));
+disconnectWorkerButton.addEventListener('click', () => performAdminAction('/admin/disconnect-worker', 'disconnect worker', 'Are you sure you want to disconnect the worker?'));
+clearQueueButton.addEventListener('click', () => performAdminAction('/admin/clear-queue', 'clear queue', 'Are you sure you want to clear the entire job queue?'));
+clearImageCacheButton.addEventListener('click', () => performAdminAction('/admin/clear-image-cache', 'clear image cache', 'Are you sure you want to clear the permanent image cache?'));
+clearStatsButton.addEventListener('click', () => performAdminAction('/admin/clear-stats', 'clear stats', 'Are you sure you want to clear ALL traffic stats and search history?'));
+document.getElementById('theme-controls').addEventListener('click', (event) => { if (event.target.classList.contains('theme-button')) { const theme = event.target.dataset.theme; setTheme(theme); } });
+makeItRainButton.addEventListener('click', () => performAdminAction('/admin/trigger-rain', 'trigger rain'));
+// --- ADMIN PANEL FUNCTIONS ---
+async function fetchAdminData(code) { currentAdminCode = code; try { const response = await fetch('/admin/traffic-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }), }); if (!response.ok) { alert('Incorrect code.'); return; } const data = await response.json(); workerStatusEl.textContent = data.workerStatus; workerStatusEl.className = data.workerStatus === 'Connected' ? 'enabled' : 'disabled'; updateQueueStatus(data.isQueuePaused); jobQueueCountEl.textContent = data.jobQueue.length; jobQueueListEl.innerHTML = data.jobQueue.length > 0 ? data.jobQueue.map(job => `<li>"${job}"</li>`).join('') : '<li>Queue is empty.</li>'; activeJobsCountEl.textContent = data.activeJobs.length; activeJobsListEl.innerHTML = data.activeJobs.length > 0 ? data.activeJobs.map(job => `<li>"${job}"</li>`).join('') : '<li>No active jobs.</li>'; imageCacheSizeEl.textContent = data.imageCacheSize; updateMaintenanceStatus(data.isServiceDisabled); totalSearchesEl.textContent = data.totalSearches; uniqueVisitorsEl.textContent = data.uniqueVisitors; usersOnlineEl.textContent = data.onlineUsers; searchHistoryListEl.innerHTML = data.searchHistory.length > 0 ? data.searchHistory.map(item => `<li>"${item.query}" at ${new Date(item.timestamp).toLocaleString()}</li>`).join('') : '<li>No searches recorded yet.</li>'; currentThemeDisplay.textContent = data.currentTheme.charAt(0).toUpperCase() + data.currentTheme.slice(1); topSearchesListEl.innerHTML = data.topSearches && data.topSearches.length > 0 ? data.topSearches.map(item => `<li>"${item.term}" (${item.count} times)</li>`).join('') : '<li>No searches yet.</li>'; adminPanel.style.display = 'flex'; } catch (error) { console.error("Error fetching admin data:", error); alert("An error occurred while fetching stats."); } }
+async function performAdminAction(url, actionName, confirmation = null, body = {}) { if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; } if (confirmation && !confirm(confirmation)) return; try { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, ...body }), }); const data = await response.json(); if (!response.ok) throw new Error(data.message || `Failed to ${actionName}.`); if (data.message) alert(data.message); if (url.includes('set-theme') || url.includes('trigger-rain') || url.includes('message')) { pollForLiveState(); } fetchAdminData(currentAdminCode); } catch (error) { console.error(`Error during ${actionName}:`, error); alert(`An error occurred: ${error.message}`); } }
+async function setTheme(themeName) { await performAdminAction('/admin/set-theme', 'set theme', null, { theme: themeName }); }
+async function clearCache(isFullClear) { const queryToClear = singleCacheInput.value.trim(); if (!isFullClear && !queryToClear) { alert("Please enter a query to clear."); return; } const confirmation = isFullClear ? "Are you sure you want to clear the entire search cache?" : `Are you sure you want to clear the cache for "${queryToClear}"?`; if (confirm(confirmation)) { performAdminAction('/admin/clear-cache', 'clear cache', null, { query: isFullClear ? null : queryToClear }); if (!isFullClear) singleCacheInput.value = ''; } }
+function updateMaintenanceStatus(isDisabled) { maintenanceStatusEl.textContent = isDisabled ? 'DISABLED' : 'ENABLED'; maintenanceStatusEl.className = isDisabled ? 'disabled' : 'enabled'; }
+function updateQueueStatus(isPaused) { queueStatusEl.textContent = isPaused ? 'PAUSED' : 'RUNNING'; queueStatusEl.className = isPaused ? 'disabled' : 'enabled'; }
+async function setPermanentMessage(message) { await performAdminAction('/admin/set-permanent-message', 'set permanent message', null, { message }); adminPermanentMessageInput.value = ""; }
+async function clearPermanentMessage() { if (confirm("Are you sure you want to clear the permanent message?")) { await performAdminAction('/admin/clear-permanent-message', 'clear permanent message'); } }
+async function sendFlashMessage(message) { if (!message.trim()) { alert("Please enter a message to send."); return; } await performAdminAction('/admin/flash-message', 'send flash message', null, { message }); adminFlashMessageInput.value = ""; }
