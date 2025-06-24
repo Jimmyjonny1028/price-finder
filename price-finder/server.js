@@ -1,4 +1,4 @@
-// server.js (FINAL, with Universal Pattern Fingerprinting Engine)
+// server.js (FINAL, with Strict Query-First Filtering)
 
 const express = require('express');
 const cors = require('cors');
@@ -54,87 +54,34 @@ const wss = new WebSocketServer({ server });
 function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueue.length === 0) return; const nextQuery = jobQueue.shift(); workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery })); }
 wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
 
+// --- HELPER FUNCTIONS AND KEYWORDS ---
 
-// --- THE UNIVERSAL PATTERN FINGERPRINTING ENGINE ---
-/**
- * Analyzes result titles to find a dominant "fingerprint" of descriptive keywords,
- * then filters the results to only include items matching that fingerprint.
- * This works for any product category without a pre-defined knowledge base.
- * @param {Array<Object>} results - The list of result objects.
- * @param {string} query - The original search query.
- * @returns {Array<Object>} The intelligently filtered list of results.
- */
-function filterByPatternFingerprint(results, query) {
-    if (results.length < 5) return results; // Need enough data to find a pattern
-
-    const queryWords = new Set(query.toLowerCase().match(/\b(\w+)\b/g) || []);
-    
-    // Generic stop words - this is our only "knowledge" and it's universal
-    const stopWords = new Set([
-        'the', 'a', 'an', 'for', 'with', 'and', 'or', 'on', 'in', 'of', 'at', 'to',
-        'pro', 'max', 'plus', 'ultra', 'mini', 'gen', 'new', 'kit',
-        'gb', 'tb', 'hz', 'mah', 'inch', 'cm', 'mm', 'kg', 'v', 'w', 'amp', 'ah',
-        'black', 'white', 'silver', 'gold', 'gray', 'blue', 'red', 'green', 'pink',
-        'purple', 'yellow', 'orange', 'bronze', 'graphite', 'sierra', 'alpine',
-        'starlight', 'midnight'
-    ]);
-
-    const patternFrequencies = new Map();
-
-    // STEP 1 & 2: Deconstruct titles and identify fingerprints
-    for (const item of results) {
-        const title = item.title.toLowerCase();
-        
-        // Extract significant words (tokens) from the title
-        const tokens = (title.match(/\b(\w+)\b/g) || [])
-            .filter(word => 
-                word.length > 2 &&         // Must be reasonably long
-                !queryWords.has(word) &&   // Not part of the original query
-                !stopWords.has(word) &&    // Not a generic stop word
-                isNaN(word)                // Not a pure number (like a model number)
-            );
-        
-        if (tokens.length > 0) {
-            // A "fingerprint" is the sorted list of significant tokens. Sorting makes it consistent.
-            const fingerprint = tokens.sort().join(',');
-            if (fingerprint) {
-                 patternFrequencies.set(fingerprint, (patternFrequencies.get(fingerprint) || 0) + 1);
-            }
-        }
-    }
-
-    if (patternFrequencies.size === 0) {
-        console.log('[Pattern Filter] No significant patterns found after cleaning. Skipping filter.');
-        return results;
-    }
-
-    // STEP 3: Establish the Dominant Fingerprint
-    const sortedPatterns = [...patternFrequencies.entries()].sort((a, b) => b[1] - a[1]);
-    const [dominantFingerprint, dominantCount] = sortedPatterns[0];
-
-    // The pattern must be shared by a meaningful number of results
-    const consensusThreshold = Math.max(2, results.length * 0.20); // At least 2 items or 20% of the set
-
-    if (dominantCount < consensusThreshold) {
-        console.log(`[Pattern Filter] No dominant consensus. Top pattern ("${dominantFingerprint.replace(/,/g, ' ')}") only in ${dominantCount} items. Skipping filter.`);
-        return results;
-    }
-
-    // STEP 4: Ruthless Filtering by the Master Fingerprint
-    const fingerprintWords = dominantFingerprint.split(',');
-    console.log(`[Pattern Filter] Dominant fingerprint found: [${fingerprintWords.join(', ')}]. Filtering results by this pattern.`);
+// This is now the most important filter. It ensures every word from the query is in the title.
+const filterResultsByQuery = (results, query) => {
+    const queryLower = query.toLowerCase();
+    const queryWords = queryLower.split(' ').filter(w => w.length > 0);
+    if (queryWords.length === 0) return results;
 
     return results.filter(item => {
-        const titleLower = item.title.toLowerCase();
-        // The item's title MUST contain ALL words from the dominant fingerprint
-        return fingerprintWords.every(word => titleLower.includes(word));
+        const itemTitle = item.title.toLowerCase();
+        return queryWords.every(word => itemTitle.includes(word));
     });
-}
+};
 
+const ACCESSORY_KEYWORDS = ['case', 'protector', 'charger', 'cable', 'adapter', 'stand', 'dock', 'strap', 'band', 'film', 'glass', 'cover', 'mount', 'holder'];
 
-// --- Utility Functions (unchanged) ---
-const filterResultsByQuery = (results, query) => { const queryLower = query.toLowerCase(); const queryWords = queryLower.split(' ').filter(w => w.length > 1 && isNaN(w)); const queryNumbers = queryLower.split(' ').filter(w => !isNaN(w) && w.length > 0); if (queryWords.length === 0 && queryNumbers.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); const hasAllWords = queryWords.every(word => itemTitle.includes(word)); const hasAllNumbers = queryNumbers.every(num => itemTitle.includes(num)); return hasAllWords && hasAllNumbers; }); };
-const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ]; return REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword)) ? 'Refurbished' : 'New'; };
+// This filter is only used as a secondary cleanup step.
+const filterForIrrelevantAccessories = (results) => {
+    return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword)));
+};
+
+// This function determines if the user is *intentionally* looking for an accessory.
+const detectAccessorySearchIntent = (query) => {
+    const queryLower = query.toLowerCase();
+    return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword));
+};
+
+const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); const REFURBISHED_KEYWORDS = ['refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new']; return REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword)) ? 'Refurbished' : 'New'; };
 const extractColorFromTitle = (title) => { const lowerCaseTitle = title.toLowerCase(); const COLOR_LIST = ['black', 'white', 'silver', 'gold', 'gray', 'blue', 'red', 'green', 'pink', 'purple', 'yellow', 'orange', 'bronze', 'graphite', 'sierra', 'alpine', 'starlight', 'midnight']; for (const color of COLOR_LIST) { if (lowerCaseTitle.includes(color)) return color; } return null; };
 function parsePythonResults(results) { return results.map(item => { const fullText = item.title; const priceMatch = fullText.match(/\$\s?[\d,]+(\.\d{2})?/); const priceString = priceMatch ? priceMatch[0] : null; const price = priceString ? parseFloat(priceString.replace(/[^0-9.]/g, '')) : null; if (!price) return null; const store = fullText.split(' ')[0]; return { title: fullText, price: price, price_string: priceString, store: store, url: item.url || '#' }; }).filter(Boolean); }
 async function enrichResultsWithImages(results, baseQuery) { if (results.length === 0) return results; const defaultImageUrl = await fetchImageForQuery(baseQuery); const uniqueColors = new Set(results.map(result => extractColorFromTitle(result.title)).filter(Boolean)); const colorsToFetch = Array.from(uniqueColors).slice(0, 2); const colorImageMap = new Map(); if (colorsToFetch.length > 0) { console.log(`Enriching with up to 2 extra color-specific images for: ${colorsToFetch.join(', ')}`); } await Promise.all(colorsToFetch.map(async (color) => { const specificQuery = `${baseQuery} ${color}`; const imageUrl = await fetchImageForQuery(specificQuery); colorImageMap.set(color, imageUrl); })); results.forEach(result => { const color = extractColorFromTitle(result.title); result.image = colorImageMap.get(color) || defaultImageUrl; }); return results; }
@@ -145,7 +92,7 @@ async function fetchImageForQuery(query) { const cacheKey = query.toLowerCase();
 app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } const normalizedQuery = query.toLowerCase().trim(); if (normalizedQuery) { const currentCount = searchTermFrequency.get(normalizedQuery) || 0; searchTermFrequency.set(normalizedQuery, currentCount + 1); } } catch (e) { console.error("Error logging traffic:", e); } const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData.results); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
 app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey).results); } else { return res.status(202).send(); }});
 
-// --- REWRITTEN: /submit-results using the new Pattern Fingerprinting Engine ---
+// --- REWRITTEN: /submit-results with the final, simplified logic ---
 app.post('/submit-results', async (req, res) => {
     const { secret, query, results } = req.body;
     if (secret !== SERVER_SIDE_SECRET) { return res.status(403).send('Forbidden'); }
@@ -154,11 +101,22 @@ app.post('/submit-results', async (req, res) => {
 
     let pipeline = parsePythonResults(results);
 
-    // This is now the primary, intelligent filtering step.
-    pipeline = filterByPatternFingerprint(pipeline, query);
-
-    // The simple query word filter is still a good final check for basic relevance.
+    // STEP 1: Apply the strict, literal filter. This is the most important step.
+    console.log(`[Filter] Applying strict query filter for "${query}"...`);
     pipeline = filterResultsByQuery(pipeline, query);
+    console.log(`[Filter] Found ${pipeline.length} items containing all query words.`);
+
+    // STEP 2: Detect user intent. Are they looking for an accessory?
+    const isAccessorySearch = detectAccessorySearchIntent(query);
+
+    // STEP 3: If they are NOT looking for an accessory, clean up any that slipped through.
+    if (!isAccessorySearch && pipeline.length > 0) {
+        console.log(`[Filter] This is a main product search. Removing accessories...`);
+        pipeline = filterForIrrelevantAccessories(pipeline);
+        console.log(`[Filter] ${pipeline.length} items remain after accessory cleanup.`);
+    } else {
+        console.log(`[Filter] This is an accessory search. Skipping accessory cleanup.`);
+    }
 
     if (pipeline.length > 0) {
         const resultsWithImages = await enrichResultsWithImages(pipeline, query);
