@@ -1,4 +1,4 @@
-// public/script.js (FINAL, with clear banner fix)
+// public/script.js (FINAL, with all features and fixes)
 
 // --- Element Selection ---
 const searchForm = document.getElementById('search-form');
@@ -15,9 +15,8 @@ const storeFilterPanel = document.getElementById('store-filter-panel');
 const storeFilterList = document.getElementById('store-filter-list');
 const storeSelectAllButton = document.getElementById('store-select-all-button');
 const storeUnselectAllButton = document.getElementById('store-unselect-all-button');
-
 const permanentMessageBanner = document.getElementById('permanent-message-banner');
-const themeNotificationEl = document.getElementById('theme-notification'); // Reused for flash messages
+const themeNotificationEl = document.getElementById('theme-notification');
 
 // --- Admin Panel Element Selection (Complete) ---
 const adminButton = document.getElementById('admin-button');
@@ -66,7 +65,7 @@ let notificationTimeout;
 let currentAdminCode = null;
 
 // --- Main Event Listeners ---
-searchForm.addEventListener('submit', handleSearch);
+searchForm.addEventListener('submit', (event) => handleSearch(event));
 sortSelect.addEventListener('change', applyFiltersAndSort);
 conditionFilterSelect.addEventListener('change', applyFiltersAndSort);
 storeFilterButton.addEventListener('click', () => { storeFilterPanel.classList.toggle('hidden'); });
@@ -79,11 +78,115 @@ closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'no
 adminPanel.addEventListener('click', (event) => { if (event.target === adminPanel) { adminPanel.style.display = 'none'; } });
 
 // --- Core Application Logic ---
-function showNoResults() {
+function showGenericError() {
     resultsContainer.innerHTML = `<p>Sorry! Our database doesnt currently contain this product or a error has occured please try again later.</p>`;
 }
-async function handleSearch(event) { event.preventDefault(); const searchTerm = searchInput.value.trim(); if (!searchTerm) { resultsContainer.innerHTML = '<p>Please enter a product to search for.</p>'; return; } searchButton.disabled = true; controlsContainer.style.display = 'none'; resultsContainer.innerHTML = ''; let messageIndex = 0; loaderText.textContent = loadingMessages[messageIndex]; loader.classList.remove('hidden'); loader.classList.remove('polling'); loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000); try { const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`); if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error || `Server returned an error: ${response.statusText}`); } if (response.status === 202) { loader.classList.add('polling'); pollForResults(searchTerm); return; } const results = await response.json(); if (results.length > 0) { fullResults = results; populateAndShowControls(); applyFiltersAndSort(); } else { showNoResults(); } } catch (error) { console.error("Failed to fetch data:", error); resultsContainer.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`; } finally { if (!loader.classList.contains('polling')) { searchButton.disabled = false; loader.classList.add('hidden'); clearInterval(loadingInterval); } } }
-function pollForResults(query, attempt = 1) { const maxAttempts = 60; const interval = 5000; if (attempt > maxAttempts) { loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">The search took too long. Please check your local scraper, then try again.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); return; } fetch(`/results/${encodeURIComponent(query)}`).then(res => { if (res.status === 200) return res.json(); if (res.status === 202) { setTimeout(() => pollForResults(query, attempt + 1), interval); return null; } throw new Error('Server returned an error during polling.'); }).then(results => { if (results) { console.log("Polling successful. Found results."); loader.classList.remove('polling'); loader.classList.add('hidden'); searchButton.disabled = false; clearInterval(loadingInterval); fullResults = results; if (fullResults.length === 0) { showNoResults(); } else { populateAndShowControls(); applyFiltersAndSort(); } } }).catch(error => { console.error("Polling failed:", error); loader.classList.remove('polling'); loader.classList.add('hidden'); resultsContainer.innerHTML = `<p class="error">An error occurred while checking for results.</p>`; searchButton.disabled = false; clearInterval(loadingInterval); }); }
+
+async function handleSearch(event, suggestedQuery = null) {
+    if (event) event.preventDefault();
+    
+    const searchTerm = suggestedQuery || searchInput.value.trim();
+    if (!searchTerm) {
+        resultsContainer.innerHTML = '<p>Please enter a product to search for.</p>';
+        return;
+    }
+
+    // Only update the input bar visually if it's a new search from the user
+    if (!suggestedQuery) {
+        searchInput.value = searchTerm;
+    }
+
+    searchButton.disabled = true;
+    controlsContainer.style.display = 'none';
+    resultsContainer.innerHTML = '';
+    let messageIndex = 0;
+    loaderText.textContent = loadingMessages[messageIndex];
+    loader.classList.remove('hidden');
+    loader.classList.remove('polling');
+    
+    if (loadingInterval) clearInterval(loadingInterval);
+    loadingInterval = setInterval(() => {
+        messageIndex = (messageIndex + 1) % loadingMessages.length;
+        loaderText.textContent = loadingMessages[messageIndex];
+    }, 5000);
+    
+    try {
+        const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`);
+        if (!response.ok) { throw new Error('Server search request failed.'); }
+        if (response.status === 202) {
+            loader.classList.add('polling');
+            pollForResults(searchTerm);
+            return;
+        }
+        const data = await response.json();
+        processResults(data, searchTerm);
+    } catch (error) {
+        console.error("Failed to fetch data:", error);
+        showGenericError();
+        searchButton.disabled = false;
+        loader.classList.add('hidden');
+        clearInterval(loadingInterval);
+    }
+}
+
+function pollForResults(query, attempt = 1) {
+    const maxAttempts = 60;
+    const interval = 5000;
+    if (attempt > maxAttempts) {
+        loader.classList.remove('polling');
+        loader.classList.add('hidden');
+        showGenericError();
+        searchButton.disabled = false;
+        clearInterval(loadingInterval);
+        return;
+    }
+    fetch(`/results/${encodeURIComponent(query)}`)
+        .then(res => {
+            if (res.status === 200) return res.json();
+            if (res.status === 202) {
+                setTimeout(() => pollForResults(query, attempt + 1), interval);
+                return null;
+            }
+            throw new Error('Server returned an error during polling.');
+        })
+        .then(data => {
+            if (data) {
+                console.log("Polling successful. Received final data object.");
+                loader.classList.remove('polling');
+                loader.classList.add('hidden');
+                searchButton.disabled = false;
+                clearInterval(loadingInterval);
+                processResults(data, query);
+            }
+        })
+        .catch(error => {
+            console.error("Polling failed:", error);
+            loader.classList.remove('polling');
+            loader.classList.add('hidden');
+            showGenericError();
+            searchButton.disabled = false;
+            clearInterval(loadingInterval);
+        });
+}
+
+function processResults(data, query) {
+    if (data.results.length === 0 && data.suggestion) {
+        resultsContainer.innerHTML = `<p>No deals found for "${query}". Trying a broader search for "${data.suggestion}"...</p>`;
+        setTimeout(() => {
+            handleSearch(null, data.suggestion);
+        }, 2000);
+        return;
+    }
+
+    fullResults = data.results || [];
+    if (fullResults.length === 0) {
+        showGenericError();
+    } else {
+        populateAndShowControls();
+        applyFiltersAndSort();
+    }
+}
+
 function applyFiltersAndSort() { const sortBy = sortSelect.value; const conditionFilter = conditionFilterSelect.value; let processedResults = [...fullResults]; if (conditionFilter === 'new') { processedResults = processedResults.filter(item => item.condition === 'New'); } else if (conditionFilter === 'refurbished') { processedResults = processedResults.filter(item => item.condition === 'Refurbished'); } if (selectedStores.size > 0 && selectedStores.size < availableStores.length) { processedResults = processedResults.filter(item => selectedStores.has(item.store)); } if (sortBy === 'price-asc') { processedResults.sort((a, b) => a.price - b.price); } else if (sortBy === 'price-desc') { processedResults.sort((a, b) => b.price - a.price); } renderResults(processedResults); }
 function populateAndShowControls() { sortSelect.value = 'price-asc'; conditionFilterSelect.value = 'all'; availableStores = [...new Set(fullResults.map(item => item.store))].sort(); storeFilterList.innerHTML = ''; selectedStores.clear(); availableStores.forEach(store => { const li = document.createElement('li'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.id = `store-${store}`; checkbox.dataset.store = store; checkbox.checked = true; const label = document.createElement('label'); label.htmlFor = `store-${store}`; label.textContent = store; li.appendChild(checkbox); li.appendChild(label); storeFilterList.appendChild(li); selectedStores.add(store); }); updateStoreFilterButtonText(); controlsContainer.style.display = 'flex'; }
 function updateStoreFilterButtonText() { if (selectedStores.size === availableStores.length) { storeFilterButton.textContent = 'All Stores'; } else if (selectedStores.size === 0) { storeFilterButton.textContent = 'No Stores Selected'; } else if (selectedStores.size === 1) { storeFilterButton.textContent = `${selectedStores.values().next().value}`; } else { storeFilterButton.textContent = `${selectedStores.size} Stores Selected`; } }
@@ -100,7 +203,7 @@ initializeState();
 
 // --- ADMIN PANEL EVENT LISTENERS ---
 adminPermanentMessageForm.addEventListener('submit', (e) => { e.preventDefault(); setPermanentMessage(adminPermanentMessageInput.value); });
-adminClearPermanentMessageButton.addEventListener('click', () => setPermanentMessage(""));
+adminClearPermanentMessageButton.addEventListener('click', clearPermanentMessage);
 adminFlashMessageForm.addEventListener('submit', (e) => { e.preventDefault(); sendFlashMessage(adminFlashMessageInput.value); });
 toggleMaintenanceButton.addEventListener('click', () => performAdminAction('/admin/toggle-maintenance', 'toggle maintenance'));
 clearFullCacheButton.addEventListener('click', () => clearCache(true));
@@ -120,24 +223,6 @@ async function setTheme(themeName) { await performAdminAction('/admin/set-theme'
 async function clearCache(isFullClear) { const queryToClear = singleCacheInput.value.trim(); if (!isFullClear && !queryToClear) { alert("Please enter a query to clear."); return; } const confirmation = isFullClear ? "Are you sure you want to clear the entire search cache?" : `Are you sure you want to clear the cache for "${queryToClear}"?`; if (confirm(confirmation)) { performAdminAction('/admin/clear-cache', 'clear cache', null, { query: isFullClear ? null : queryToClear }); if (!isFullClear) singleCacheInput.value = ''; } }
 function updateMaintenanceStatus(isDisabled) { maintenanceStatusEl.textContent = isDisabled ? 'DISABLED' : 'ENABLED'; maintenanceStatusEl.className = isDisabled ? 'disabled' : 'enabled'; }
 function updateQueueStatus(isPaused) { queueStatusEl.textContent = isPaused ? 'PAUSED' : 'RUNNING'; queueStatusEl.className = isPaused ? 'disabled' : 'enabled'; }
-
-// --- REWRITTEN & ROBUST MESSAGING FUNCTIONS ---
-async function setPermanentMessage(message) {
-    // Only ask for confirmation when clearing the message (sending an empty string)
-    if (message.trim() === "") {
-        if (!confirm("Are you sure you want to clear the permanent message?")) {
-            return; // Stop if the user cancels
-        }
-    }
-    await performAdminAction('/admin/set-permanent-message', 'set permanent message', null, { message });
-    adminPermanentMessageInput.value = "";
-}
-
-async function sendFlashMessage(message) {
-    if (!message.trim()) {
-        alert("Please enter a message to send.");
-        return;
-    }
-    await performAdminAction('/admin/flash-message', 'send flash message', null, { message });
-    adminFlashMessageInput.value = "";
-}
+async function setPermanentMessage(message) { await performAdminAction('/admin/set-permanent-message', 'set permanent message', null, { message }); adminPermanentMessageInput.value = ""; }
+async function clearPermanentMessage() { if (confirm("Are you sure you want to clear the permanent message?")) { await performAdminAction('/admin/clear-permanent-message', 'clear permanent message'); } }
+async function sendFlashMessage(message) { if (!message.trim()) { alert("Please enter a message to send."); return; } await performAdminAction('/admin/flash-message', 'send flash message', null, { message }); adminFlashMessageInput.value = ""; }
