@@ -1,4 +1,4 @@
-// server.js (FINAL V14, with Admin Messaging and Backup API)
+// server.js (FINAL V15, with OzBargain API Response Fix)
 
 const express = require('express');
 const cors = require('cors');
@@ -16,7 +16,7 @@ const server = http.createServer(app);
 
 let limit;
 
-// Caches and State
+// Caches and State (unchanged)
 const searchCache = new Map();
 let imageCache = new Map();
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
@@ -28,13 +28,12 @@ const USER_ONLINE_TIMEOUT_MS = 65 * 1000;
 let isQueueProcessingPaused = false;
 let isMaintenanceModeEnabled = false;
 
-// --- EXPANDED LIVE STATE FOR MESSAGING ---
 let liveState = {
     theme: 'default',
     rainEventTimestamp: 0,
     onlineUsers: 0,
-    permanentMessage: "", // For the new permanent banner
-    flashMessage: { text: "", timestamp: 0 } // For the new temporary message
+    permanentMessage: "",
+    flashMessage: { text: "", timestamp: 0 }
 };
 const IMAGE_CACHE_PATH = path.join(__dirname, 'image_cache.json');
 const LIVE_STATE_PATH = path.join(__dirname, 'public', 'live_state.json');
@@ -63,14 +62,8 @@ wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); 
 
 // --- OZbARGAIN BACKUP API LOGIC ---
 let lastOzbargainCallTimestamp = 0;
-const OZbARGAIN_COOLDOWN_MS = 60 * 1000; // 1 minute
+const OZbARGAIN_COOLDOWN_MS = 60 * 1000;
 
-/**
- * Fetches and parses deals from OzBargain as a backup.
- * Rate-limited to one call per minute.
- * @param {string} query The user's search query for filtering.
- * @returns {Promise<Array>} A promise that resolves to an array of formatted results.
- */
 async function fetchOzbargainBackup(query) {
     const now = Date.now();
     if (now - lastOzbargainCallTimestamp < OZbARGAIN_COOLDOWN_MS) {
@@ -86,43 +79,29 @@ async function fetchOzbargainBackup(query) {
     lastOzbargainCallTimestamp = now;
 
     try {
-        const response = await axios.get(api_url, { headers });
+        // THE FIX: Explicitly request the response as plain text.
+        const response = await axios.get(api_url, {
+            headers,
+            responseType: 'text' 
+        });
         
+        // Now response.data is guaranteed to be a string.
         const jsonText = response.data.replace(/^ozb_callback\(|\)$/g, '');
         const data = JSON.parse(jsonText);
 
-        if (!data.records || data.records.length === 0) {
-            return [];
-        }
+        if (!data.records || data.records.length === 0) return [];
         
         const queryWords = query.toLowerCase().split(' ').filter(w => w.length > 1);
         const ozbargainResults = data.records.filter(record => {
             const titleLower = record.title.toLowerCase();
             return queryWords.every(word => titleLower.includes(word));
         }).map(record => {
-            let price = null;
-            let price_string = null;
-            let store = 'OzBargain';
-
+            let price = null, price_string = null, store = 'OzBargain';
             const priceMatch = record.title.match(/\$(\d+\.?\d*)/);
-            if (priceMatch) {
-                price = parseFloat(priceMatch[1]);
-                price_string = priceMatch[0];
-            }
-
+            if (priceMatch) { price = parseFloat(priceMatch[1]); price_string = priceMatch[0]; }
             const storeMatch = record.title.match(/@\s*(.+)/);
-            if (storeMatch) {
-                store = storeMatch[1].trim();
-            }
-            
-            return {
-                title: record.title,
-                price,
-                price_string,
-                store,
-                url: `https://www.ozbargain.com.au${record.url}`,
-                source: 'OzBargain'
-            };
+            if (storeMatch) { store = storeMatch[1].trim(); }
+            return { title: record.title, price, price_string, store, url: `https://www.ozbargain.com.au${record.url}`, source: 'OzBargain' };
         }).filter(item => item.price !== null);
 
         return ozbargainResults;
@@ -136,20 +115,10 @@ async function fetchOzbargainBackup(query) {
 
 // --- "ENTITY-FIRST" FILTERING ENGINE ---
 const CORE_ENTITIES = {
-    'xbox': {
-        positive: ['console', 'series x', 'series s', '1tb', '2tb', '512gb'],
-        negative: ['controller', 'headset', 'game drive', 'for xbox', 'wired', 'wireless headset', 'play and charge', 'chat link', 'game', 'steering wheel', 'racing wheel', 'flightstick', 'sofa', 'expansion card', 'arcade stick']
-    },
-    'nintendo switch': {
-        positive: ['console', 'oled model', 'lite'],
-        negative: ['game', 'controller', 'case', 'grip', 'dock', 'ac adaptor', 'memory card', 'travel bag', 'joy-con', 'charging grip', 'sports', 'kart', 'zelda', 'mario', 'pokemon', 'animal crossing']
-    },
-    'playstation': {
-        positive: ['console', 'ps5', 'ps4', 'slim', 'pro', '1tb', '825gb'],
-        negative: ['controller', 'headset', 'dual sense', 'game', 'vr', 'camera', 'for playstation', 'pulse 3d']
-    }
+    'xbox': { positive: ['console', 'series x', 'series s', '1tb', '2tb', '512gb'], negative: ['controller', 'headset', 'game drive', 'for xbox', 'wired', 'wireless headset', 'play and charge', 'chat link', 'game', 'steering wheel', 'racing wheel', 'flightstick', 'sofa', 'expansion card', 'arcade stick'] },
+    'nintendo switch': { positive: ['console', 'oled model', 'lite'], negative: ['game', 'controller', 'case', 'grip', 'dock', 'ac adaptor', 'memory card', 'travel bag', 'joy-con', 'charging grip', 'sports', 'kart', 'zelda', 'mario', 'pokemon', 'animal crossing'] },
+    'playstation': { positive: ['console', 'ps5', 'ps4', 'slim', 'pro', '1tb', '825gb'], negative: ['controller', 'headset', 'dual sense', 'game', 'vr', 'camera', 'for playstation', 'pulse 3d'] }
 };
-
 const GENERIC_ACCESSORY_BRANDS = ['uag', 'otterbox', 'spigen', 'zagg', 'mophie', 'lifeproof', 'incipio', 'tech21', 'cygnett', 'efm', '3sixt', 'belkin', 'smallrig', 'stm', 'dbramante1928', 'razer', 'hyperx', 'logitech', 'steelseries', 'turtle beach', 'astro', 'powera', '8bitdo', 'gamesir'];
 const GENERIC_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control'];
 const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe', 'remote', 'remote control', 'controller', 'headset'];
@@ -159,7 +128,6 @@ function getQueryIntent(query) {
     if (INTENT_ACCESSORY_KEYWORDS.some(keyword => lowerQuery.includes(keyword))) return 'FIND_ACCESSORY';
     return 'FIND_MAIN_PRODUCT';
 }
-
 function filterByQueryStrictness(results, query) {
     const stopWords = new Set(['a', 'an', 'the', 'in', 'on', 'for', 'with', 'and', 'or']);
     const queryWords = query.toLowerCase().split(' ').filter(word => word.length > 1 && !stopWords.has(word)).map(word => word.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
@@ -167,7 +135,6 @@ function filterByQueryStrictness(results, query) {
     const regexes = queryWords.map(word => new RegExp(`\\b${word}\\b`, 'i'));
     return results.filter(item => regexes.every(regex => regex.test(item.title)));
 }
-
 function calculateScore(title, query) {
     const lowerTitle = title.toLowerCase();
     const lowerQuery = query.toLowerCase();
