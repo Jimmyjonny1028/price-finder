@@ -1,4 +1,4 @@
-/* public/style.css (FINAL) */
+/* public/style.css (FINAL, with all themes and styles) */
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&display=swap');
 
 body.theme-default {
@@ -22,7 +22,6 @@ body.theme-default {
     --font-family: 'Inter', sans-serif;
     --font-family-monospace: 'Courier New', Courier, monospace;
 }
-
 body.theme-dark {
     --bg-color: #1a202c;
     --text-color: #e2e8f0;
@@ -43,7 +42,6 @@ body.theme-dark {
     --admin-button-bg: #4a5568;
     --font-family: 'Inter', sans-serif;
 }
-
 body.theme-retro {
     --bg-color: #0d0d0d;
     --text-color: #00ff41;
@@ -64,8 +62,6 @@ body.theme-retro {
     --admin-button-bg: #00ff41;
     --font-family: var(--font-family-monospace);
 }
-
-/* ### NEW THEMES START HERE ### */
 body.theme-sepia {
     --bg-color: #f4f0e8;
     --text-color: #5b4636;
@@ -86,7 +82,6 @@ body.theme-sepia {
     --admin-button-bg: #5d4037;
     --font-family: Georgia, serif;
 }
-
 body.theme-solarized {
     --bg-color: #002b36;
     --text-color: #839496;
@@ -107,7 +102,6 @@ body.theme-solarized {
     --admin-button-bg: #2aa198;
     --font-family: 'Inter', sans-serif;
 }
-
 body.theme-synthwave {
     --bg-color: #241B2F;
     --text-color: #F4F4F4;
@@ -128,11 +122,8 @@ body.theme-synthwave {
     --admin-button-bg: #F92C86;
     --font-family: 'Orbitron', sans-serif;
 }
-
-/* Base styles using variables */
 body { font-family: var(--font-family); background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px; transition: background-color .3s, color .3s; }
 .container { max-width: 800px; margin: 40px auto; padding: 30px; background-color: var(--container-bg); border-radius: 12px; box-shadow: 0 4px 12px var(--container-shadow); border: 1px solid var(--border-color); }
-/* ... the rest of the CSS file is identical to the last version ... */
 h1 { text-align: center; color: var(--text-color); margin-bottom: 10px }
 .subtitle { text-align: center; color: var(--text-color-light); margin-top: 0; margin-bottom: 30px }
 #search-form { display: flex; gap: 10px; margin-bottom: 30px }
@@ -172,15 +163,15 @@ h1 { text-align: center; color: var(--text-color); margin-bottom: 10px }
 #admin-button { position: fixed; bottom: 15px; right: 15px; width: 40px; height: 40px; border-radius: 50%; background-color: var(--admin-button-bg); color: white; border: 2px solid white; font-size: 18px; font-weight: bold; cursor: pointer; z-index: 1000; opacity: 0.3; transition: opacity 0.2s; }
 #admin-button:hover { opacity: 1; }
 .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); z-index: 1001; justify-content: center; align-items: center; }
-.modal-content { background-color: var(--container-bg); padding: 25px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); width: 90%; max-width: 600px; position: relative; max-height: 80vh; overflow-y: auto; }
+.modal-content { background-color: var(--container-bg); padding: 25px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); width: 90%; max-width: 700px; position: relative; max-height: 80vh; overflow-y: auto; }
 .close-button { position: absolute; top: 10px; right: 15px; font-size: 28px; font-weight: bold; color: var(--text-color-light); background: none; border: none; cursor: pointer; }
 .admin-section { padding: 15px 0; border-bottom: 1px solid var(--border-color); }
 .admin-section:last-child { border-bottom: none; padding-bottom: 0; }
 .admin-section h4 { margin-top: 0; margin-bottom: 10px; color: var(--text-color); }
 .admin-controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
-.admin-controls button { padding: 8px 12px; font-size: 14px; color: #fff; border: none; border-radius: 6px; cursor: pointer; transition: background-color 0.2s; background-color: var(--text-color-light); font-family: var(--font-family); }
-.admin-controls button:hover { opacity: 0.8; }
-.admin-controls button.danger { background-color: var(--accent-color-danger); }
+.admin-controls button, .message-controls button { padding: 8px 12px; font-size: 14px; color: #fff; border: none; border-radius: 6px; cursor: pointer; transition: background-color 0.2s; background-color: var(--text-color-light); font-family: var(--font-family); }
+.admin-controls button:hover, .message-controls button:hover { opacity: 0.8; }
+.admin-controls button.danger, .message-controls button.danger { background-color: var(--accent-color-danger); }
 .admin-controls button.theme-button { color: #fff; }
 .admin-controls button.theme-button[data-theme="default"] { background-color: #3182ce; }
 .admin-controls button.theme-button[data-theme="dark"] { background-color: #63b3ed; color: #1a202c; }
@@ -190,27 +181,15 @@ h1 { text-align: center; color: var(--text-color); margin-bottom: 10px }
 .admin-controls button.theme-button[data-theme="synthwave"] { background-color: #00FFFF; color: #1A1423; }
 #worker-status.enabled, #maintenance-status.enabled, #queue-status.enabled { color: var(--accent-color-success); font-weight: bold; }
 #worker-status.disabled, #maintenance-status.disabled, #queue-status.disabled { color: var(--accent-color-danger); font-weight: bold; }
-.status-list { list-style-type: none; padding-left: 0; margin-top: 5px; font-size: 14px; color: var(--text-color-light); max-height: 120px; overflow-y: auto; background-color: var(--secondary-bg-color); border: 1px solid var(--border-color); border-radius: 4px; padding-top: 5px; padding-bottom: 5px; }
-.status-list li { margin-bottom: 4px; }
+.status-list { list-style-type: none; padding-left: 0; margin-top: 5px; font-size: 14px; color: var(--text-color-light); max-height: 120px; overflow-y: auto; background-color: var(--secondary-bg-color); border: 1px solid var(--border-color); border-radius: 4px; padding: 5px; }
+.status-list li { margin-bottom: 4px; padding: 2px 4px;}
 #search-history-list { list-style-type: none; padding-left: 0; font-size: 14px; color: var(--text-color-light); max-height: 150px; overflow-y: auto; }
 #search-history-list li { padding: 8px; border-bottom: 1px solid var(--border-color); }
 #search-history-list li:last-child { border-bottom: none; }
-.cache-controls { display: flex; gap: 10px; margin-top: 10px; align-items: center; }
+.cache-controls, .message-controls { display: flex; gap: 10px; margin-top: 10px; align-items: center; }
 .cache-controls button { background-color: var(--accent-color-warning); }
-.cache-controls input { flex-grow: 1; padding: 8px 10px; border: 1px solid var(--input-border-color); border-radius: 6px; background-color: var(--container-bg); color: var(--text-color); font-family: var(--font-family); }
+.cache-controls input, .message-controls input { flex-grow: 1; padding: 8px 10px; border: 1px solid var(--input-border-color); border-radius: 6px; background-color: var(--container-bg); color: var(--text-color); font-family: var(--font-family); }
 #theme-notification { position: fixed; bottom: 20px; left: 50%; transform: translate(-50%, 100px); padding: 12px 25px; background-color: var(--admin-button-bg); color: var(--text-color-inverted); border-radius: 8px; box-shadow: 0 4px 12px var(--container-shadow); z-index: 2000; font-size: 16px; opacity: 0; transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out; pointer-events: none; }
 #theme-notification.hidden { opacity: 0; transform: translate(-50%, 100px); }
 #theme-notification:not(.hidden) { opacity: 1; transform: translate(-50%, 0); }
-
-@media (max-width: 768px) {
-    body { padding: 5px; }
-    .container { margin: 10px auto; padding: 15px; }
-    h1 { font-size: 1.75rem; }
-    #search-form { flex-direction: column; }
-    .controls-container { flex-direction: column; align-items: stretch; }
-    .result-card { flex-direction: column; text-align: center; gap: 15px; }
-    .result-price a { width: 100%; box-sizing: border-box; }
-    .modal-content { padding: 15px; width: 95%; }
-    .admin-controls, .cache-controls { flex-direction: column; align-items: stretch; }
-    .cache-controls input { width: auto; }
-}
+#permanent-message-banner { position: fixed; bottom: 0; left: 0; width: 100%; background-color: var(--accent-color-warning); color: var(--text-color-
