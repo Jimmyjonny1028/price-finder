@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Price Finder</title>
+    <title>Deal Finder</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Orbitron:wght@400..900&display=swap" rel="stylesheet">
@@ -11,30 +11,14 @@
 </head>
 <body class="theme-default">
     <div class="container">
-        <h1>Smart Price Finder</h1>
-        <p class="subtitle">Your personal PC-powered web scraper.</p>
+        <h1>Deal Finder</h1>
+        <p class="subtitle">Your personal price comparison website</p>
         <form id="search-form">
             <input type="text" id="search-input" placeholder="e.g., iPhone 16 Pro Max" required>
             <button type="submit" id="search-button">Search</button>
         </form>
         <div class="controls-container" id="controls-container" style="display: none;">
-            <div class="control-group"> <label for="sort-select">Sort by:</label> <select id="sort-select"> <option value="price-asc">Price: Low to High</option> <option value="price-desc">Price: High to Low</option> </select> </div>
-            <div class="control-group"> <label for="condition-filter-select">Condition:</label> <select id="condition-filter-select"> <option value="all">All Conditions</option> <option value="new">New Only</option> <option value="refurbished">Refurbished Only</option> </select> </div>
-            <div class="control-group">
-                <label>Store:</label>
-                <div class="dropdown-check-container">
-                    <button type="button" id="store-filter-button">All Stores</button>
-                    <div id="store-filter-panel" class="hidden">
-                        <div class="dropdown-actions">
-                            <button type="button" id="store-select-all-button">Select All</button>
-                            <button type="button" id="store-unselect-all-button">Unselect All</button>
-                        </div>
-                        <ul id="store-filter-list">
-                        </ul>
-                    </div>
-                </div>
             </div>
-        </div>
         <div id="loader" class="hidden"> <div class="spinner"></div> <p>Contacting local scraper...</p> </div>
         <div id="results-container"></div>
         <p class="disclaimer" style="text-align: center; color: var(--text-color-light); font-size: 12px; margin-top: 20px;"> All prices are estimated in AUD. Results may include affiliate links. </p>
@@ -45,75 +29,27 @@
         <div class="modal-content">
             <button id="close-admin-panel" class="close-button">×</button>
             <h2>Admin Panel</h2>
+            
             <div class="admin-section">
-                <h4>Live Status & Worker Control</h4>
-                <p><strong>Worker Connection:</strong> <span id="worker-status">UNKNOWN</span></p>
-                <p><strong>Job Dispatch:</strong> <span id="queue-status">UNKNOWN</span></p>
-                <div class="admin-controls">
-                    <button id="toggle-queue-button">Pause/Resume Queue</button>
-                    <button id="disconnect-worker-button" class="danger">Disconnect Worker</button>
-                </div>
-            </div>
-            <div class="admin-section">
-                <h4>Job Queue (<span id="job-queue-count">0</span>)</h4>
-                <ul id="job-queue-list" class="status-list"><li>Queue is empty.</li></ul>
-                <div class="admin-controls">
-                    <button id="clear-queue-button" class="danger">Clear Job Queue</button>
-                </div>
-            </div>
-            <div class="admin-section">
-                <h4>Active Jobs (<span id="active-jobs-count">0</span>)</h4>
-                <ul id="active-jobs-list" class="status-list"><li>No active jobs.</li></ul>
-            </div>
-            <div class="admin-section">
-                <h4>Cache Management</h4>
-                <p><strong>Images Cached Permanently:</strong> <span id="image-cache-size">0</span></p>
-                <div class="admin-controls">
-                    <button id="clear-full-cache-button" class="danger">Clear Search Cache</button>
-                    <button id="clear-image-cache-button" class="danger">Clear Image Cache</button>
-                </div>
-                <form id="single-cache-clear-form" class="cache-controls">
-                    <input type="text" id="single-cache-input" placeholder="Query to clear from search cache">
-                    <button type="submit">Clear Specific</button>
+                <h4>Global Messaging</h4>
+                <form id="permanent-message-form" class="message-controls">
+                    <input type="text" id="permanent-message-input" placeholder="Permanent banner text...">
+                    <button type="submit">Set Banner</button>
+                    <button type="button" id="clear-permanent-message-button" class="danger">Clear Banner</button>
+                </form>
+                <form id="flash-message-form" class="message-controls">
+                    <input type="text" id="flash-message-input" placeholder="10-second flash message...">
+                    <button type="submit">Send Flash</button>
                 </form>
             </div>
+
             <div class="admin-section">
-                <h4>System Control & Fun Zone</h4>
-                <p><strong>Global Theme:</strong> <span id="current-theme-display">Default</span></p>
-                <div id="theme-controls" class="admin-controls">
-                    <button class="theme-button" data-theme="default">Default</button>
-                    <button class="theme-button" data-theme="dark">Dark</button>
-                    <button class="theme-button" data-theme="retro">Retro</button>
-                    <button class="theme-button" data-theme="sepia">Sepia</button>
-                    <button class="theme-button" data-theme="solarized">Solarized</button>
-                    <button class="theme-button" data-theme="synthwave">Synthwave</button>
-                </div>
-                <div class="admin-controls" style="margin-top: 10px;">
-                    <button id="make-it-rain-button">Make It Rain 💰</button>
-                    <button id="toggle-maintenance-button">Toggle Maintenance</button>
-                </div>
-                <p style="margin-top: 10px;">Maintenance Mode: <strong id="maintenance-status">UNKNOWN</strong></p>
-            </div>
-            <div class="admin-section">
-                <h4>Traffic Stats & History</h4>
-                <p>
-                    <strong>Total Searches:</strong> <span id="total-searches">0</span> |
-                    <strong>Unique Visitors:</strong> <span id="unique-visitors">0</span> |
-                    <strong>Users Online:</strong> <span id="users-online">0</span>
-                </p>
-                <p><strong>Top 5 Searched Terms:</strong></p>
-                <ol id="top-searches-list" class="status-list"></ol>
-                <p><strong>Recent Searches:</strong></p>
-                <ul id="search-history-list" class="status-list"></ul>
-                <div class="admin-controls">
-                     <button id="clear-stats-button" class="danger">Clear All Stats & History</button>
+                <h4>Live Status & Worker Control</h4>
                 </div>
             </div>
-        </div>
     </div>
     
-    <div id="theme-notification" class="hidden"></div>
-    
-    <script src="script.js"></script>
+    <div id="permanent-message-banner" class="hidden"></div>
+    <div id="theme-notification" class="hidden"></div> <script src="script.js"></script>
 </body>
 </html>
