@@ -1,4 +1,4 @@
-// server.js (FINAL V18, with WebSocket variable fix)
+// server.js (FINAL V17, with static error examples)
 
 const express = require('express');
 const cors = require('cors');
@@ -103,18 +103,6 @@ async function fetchOzbargainBackup(query) {
 }
 
 // Search & Filtering Logic
-function simplifyQuery(query) {
-    const words = query.split(' ');
-    if (words.length <= 2) return null;
-    let lastCoreWordIndex = -1;
-    words.forEach((word, index) => { if (/\d/.test(word)) { lastCoreWordIndex = index; } });
-    if (lastCoreWordIndex > 0) {
-        const simplified = words.slice(0, lastCoreWordIndex + 1).join(' ');
-        return simplified !== query ? simplified : null;
-    }
-    const simplified = words.slice(0, 2).join(' ');
-    return simplified !== query ? simplified : null;
-}
 function getQueryIntent(query) { const lowerQuery = query.toLowerCase(); if (INTENT_ACCESSORY_KEYWORDS.some(keyword => lowerQuery.includes(keyword))) return 'FIND_ACCESSORY'; return 'FIND_MAIN_PRODUCT'; }
 function filterByQueryStrictness(results, query) {
     const stopWords = new Set(['a', 'an', 'the', 'in', 'on', 'for', 'with', 'and', 'or']);
@@ -148,16 +136,16 @@ async function enrichResultsWithImages(results, baseQuery) { if (results.length 
 async function fetchImageForQuery(query) { const cacheKey = query.toLowerCase(); if (imageCache.has(cacheKey)) { return imageCache.get(cacheKey); } const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A'; if (!GOOGLE_API_KEY || !GOOGLE_CSE_ID) { return placeholder; } try { const response = await limit(() => { const url = `https://www.googleapis.com/customsearch/v1`; const params = { key: GOOGLE_API_KEY, cx: GOOGLE_CSE_ID, q: query, searchType: 'image', num: 1 }; return axios.get(url, { params }); }); const imageUrl = response.data.items?.[0]?.link || placeholder; imageCache.set(cacheKey, imageUrl); await saveImageCacheToFile(); return imageUrl; } catch (error) { console.error(`[FATAL] Google Image Search request failed for query: "${query}"`); if (error.response) { console.error('Error Data:', JSON.stringify(error.response.data, null, 2)); } else { console.error('Error Message:', error.message); } return placeholder; } }
 
 // --- WebSocket Setup ---
+const wss = new WebSocketServer({ server });
 const jobQueue = [];
 let workerSocket = null;
 let workerActiveJobs = new Set();
-const wss = new WebSocketServer({ server });
 function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueue.length === 0) return; const nextQuery = jobQueue.shift(); workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery })); }
 wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
 
 // --- API ENDPOINTS ---
-app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } const normalizedQuery = query.toLowerCase().trim(); if (normalizedQuery) { const currentCount = searchTermFrequency.get(normalizedQuery) || 0; searchTermFrequency.set(normalizedQuery, currentCount + 1); } } catch (e) { console.error("Error logging traffic:", e); } const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData.results); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
-app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey).results); } else { return res.status(202).send(); }});
+app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } const normalizedQuery = query.toLowerCase().trim(); if (normalizedQuery) { const currentCount = searchTermFrequency.get(normalizedQuery) || 0; searchTermFrequency.set(normalizedQuery, currentCount + 1); } } catch (e) { console.error("Error logging traffic:", e); } const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
+app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey)); } else { return res.status(202).send(); }});
 
 app.post('/submit-results', async (req, res) => {
     const { secret, query, results } = req.body;
@@ -194,14 +182,8 @@ app.post('/submit-results', async (req, res) => {
         searchCache.set(query.toLowerCase(), { results: finalResults, timestamp: Date.now() });
         console.log(`[Success] Processed and cached ${finalResults.length} deals for "${query}".`);
     } else {
-        const simplifiedQuery = simplifyQuery(query);
-        if (simplifiedQuery) {
-            console.log(`[Retry] No results found. Suggesting simplified query: "${simplifiedQuery}"`);
-            searchCache.set(query.toLowerCase(), { results: [], suggestion: simplifiedQuery, timestamp: Date.now() });
-        } else {
-            console.log(`[Finish] No relevant results found and query cannot be simplified.`);
-            searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
-        }
+        console.log(`[Finish] No relevant results found.`);
+        searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
     }
 });
 
