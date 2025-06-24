@@ -1,4 +1,4 @@
-// server.js (FINAL, Definitive Version with Dynamic Heuristics)
+// server.js (FINAL, Definitive Version with Dynamic Filtering and Price Sorting)
 
 const express = require('express');
 const cors = require('cors');
@@ -57,12 +57,12 @@ wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); 
 
 // --- DYNAMIC RELEVANCE & FILTERING LOGIC (V3 - Scalable) ---
 /**
- * Analyzes an entire set of search results to dynamically score them for relevance.
+ * Analyzes an entire set of search results to dynamically score and filter them for relevance.
  * This approach does not rely on hardcoded keyword lists.
  *
  * @param {Array} results - The array of parsed result objects from the scraper.
  * @param {string} query - The original user search query.
- * @returns {Array} - The sorted and scored array of results.
+ * @returns {Array} - A clean array of relevant results, sorted by relevance score.
  */
 function processAndScoreResults(results, query) {
     if (results.length === 0) {
@@ -70,72 +70,50 @@ function processAndScoreResults(results, query) {
     }
 
     // --- Step 1: Price Distribution Analysis ---
-    // First, we analyze the prices to find a dynamic "accessory threshold".
     const prices = results.map(r => r.price).sort((a, b) => a - b);
     const medianPrice = prices[Math.floor(prices.length / 2)];
-
-    // An "accessory" is often priced significantly lower than the median product price.
-    // We'll set our threshold at 40% of the median price. This is a robust heuristic.
-    // We also set a minimum floor to avoid issues with very cheap products.
     const dynamicAccessoryThreshold = Math.max(medianPrice * 0.4, 30);
     
     console.log(`[Dynamic Analysis] Median Price: $${medianPrice.toFixed(2)}. Calculated Accessory Threshold: $${dynamicAccessoryThreshold.toFixed(2)}`);
 
     const queryWords = new Set(query.toLowerCase().split(' ').filter(w => w.length > 2));
 
-
     // --- Step 2: Score Each Item Individually ---
     const scoredResults = results.map(item => {
-        let score = 100; // Start with a base score
+        let score = 100;
         const titleWords = item.title.toLowerCase().split(' ');
 
-        // --- Signal 1: Price Heuristic (Dynamic) ---
-        // If the item's price is below our dynamically calculated threshold, it's very likely an accessory.
         if (item.price < dynamicAccessoryThreshold) {
             score -= 80;
         }
 
-        // --- Signal 2: Title Wordiness ---
-        // Accessories usually have more words in their title than the query.
         const wordDelta = titleWords.length - queryWords.size;
         if (wordDelta > 3) {
-            score -= wordDelta * 5; // Penalize for each extra word over a small buffer.
+            score -= wordDelta * 5;
         }
 
-        // --- Signal 3: Unrelated Words ---
-        // How many words in the title are NOT in the original query? A high number is a red flag.
         let foreignWords = 0;
         for (const word of titleWords) {
             if (!queryWords.has(word)) {
                 foreignWords++;
             }
         }
-        // If more than 60% of the words are "foreign", it's likely an accessory description.
         const foreignRatio = foreignWords / titleWords.length;
         if (foreignRatio > 0.6) {
             score -= 50;
         }
 
-        // --- Signal 4: Query word matching (Bonus) ---
-        // Does the title contain all the words from the query?
         const hasAllQueryWords = [...queryWords].every(qw => item.title.toLowerCase().includes(qw));
         if (!hasAllQueryWords) {
-             score -= 100; // Heavy penalty if it doesn't even match the query properly.
+             score -= 100;
         }
 
         return { ...item, relevanceScore: score };
     });
 
-    // --- Step 3: Final Sort ---
-    // Filter out anything with a very low score and sort by relevance, then price.
+    // --- Step 3: Filter and Final Sort (by relevance) ---
     const relevantResults = scoredResults.filter(item => item.relevanceScore > 0);
-    
-    return relevantResults.sort((a, b) => {
-        if (a.relevanceScore !== b.relevanceScore) {
-            return b.relevanceScore - a.relevanceScore; // Higher score first
-        }
-        return a.price - b.price; // If scores are equal, cheaper first
-    });
+    return relevantResults.sort((a, b) => b.relevanceScore - a.relevanceScore);
 }
 
 
@@ -160,10 +138,13 @@ app.post('/submit-results', async (req, res) => {
     const pipeline = parsePythonResults(results);
     console.log(`[Start] Received ${pipeline.length} results from scraper for "${query}".`);
 
-    // The single, powerful call to our new dynamic processing function
-    const processedResults = processAndScoreResults(pipeline, query);
+    // Use the dynamic function to filter out irrelevant results.
+    const relevantResults = processAndScoreResults(pipeline, query);
+    console.log(`[Filter] ${relevantResults.length} relevant results remain after dynamic scoring.`);
 
-    console.log(`[Finish] ${processedResults.length} relevant results found for "${query}" after dynamic scoring.`);
+    // Re-sort the final, clean list by price to find the best deals.
+    const processedResults = relevantResults.sort((a, b) => a.price - b.price);
+    console.log(`[Sort] Final results have been sorted by price (low to high).`);
 
     if (processedResults.length > 0) {
         const resultsWithImages = await enrichResultsWithImages(processedResults, query);
@@ -172,7 +153,7 @@ app.post('/submit-results', async (req, res) => {
             condition: detectItemCondition(item.title) 
         }));
         searchCache.set(query.toLowerCase(), { results: finalResults, timestamp: Date.now() });
-        console.log(`[Success] Processed and cached ${finalResults.length} relevant results for "${query}".`);
+        console.log(`[Success] Processed and cached ${finalResults.length} deals for "${query}".`);
     } else {
         console.log(`[Finish] No relevant results found. Caching empty result.`);
         searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
@@ -189,16 +170,4 @@ app.post('/admin/toggle-queue', (req, res) => { const { code } = req.body; if (!
 app.post('/admin/clear-queue', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); jobQueue.length = 0; console.log("ADMIN ACTION: Job queue has been cleared."); res.json({ message: 'Job queue has been cleared successfully.' }); });
 app.post('/admin/disconnect-worker', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); if (workerSocket) { workerSocket.close(); console.log("ADMIN ACTION: Forcibly disconnected the worker."); res.json({ message: 'Worker has been disconnected.' }); } else { res.status(404).json({ message: 'No worker is currently connected.' }); } });
 app.post('/admin/clear-image-cache', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); imageCache.clear(); await saveImageCacheToFile(); console.log("ADMIN ACTION: Permanent image cache has been cleared."); res.json({ message: 'The permanent image cache has been cleared.' }); });
-app.post('/admin/clear-stats', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); trafficLog.totalSearches = 0; trafficLog.uniqueVisitors.clear(); trafficLog.searchHistory = []; searchTermFrequency.clear(); console.log("ADMIN ACTION: All traffic stats and search history have been cleared."); res.json({ message: 'All traffic stats and search history have been cleared.' }); });
-app.post('/admin/set-theme', async (req, res) => { const { code, theme } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const validThemes = ['default', 'dark', 'retro', 'sepia', 'solarized', 'synthwave']; if (theme && validThemes.includes(theme)) { liveState.theme = theme; await updateLiveStateFile(); console.log(`ADMIN ACTION: Global theme changed to "${theme}".`); res.json({ message: `Theme changed to ${theme}.` }); } else { res.status(400).json({ error: 'Invalid theme specified.' }); } });
-app.post('/admin/trigger-rain', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); liveState.rainEventTimestamp = Date.now(); await updateLiveStateFile(); console.log("ADMIN ACTION: Triggered global 'Make It Rain' event."); res.json({ message: 'Rain event triggered for all active users.' }); });
-
-async function startServer() {
-    const pLimitModule = await import('p-limit');
-    limit = pLimitModule.default(2);
-    await loadImageCacheFromFile();
-    await updateLiveStateFile();
-    server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
-}
-
-startServer();
+app.post('/admin/clear-stats', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); trafficLog.totalSearches = 0; trafficLog.uniqueVisitors.clear(); trafficLog.searchHistory = []; searchTermFrequency.clear(); console.log("ADMIN ACTION: All
