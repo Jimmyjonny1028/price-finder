@@ -1,9 +1,9 @@
-// server.js (FINAL V5, with 2-Stage Filtering)
+// server.js (FINAL V6, with Regex Whole-Word Matching)
 
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
-const http = require('http');
+const http =require('http');
 const { WebSocketServer } = require('ws');
 const url = require('url');
 const axios = require('axios');
@@ -54,33 +54,39 @@ const wss = new WebSocketServer({ server });
 function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueue.length === 0) return; const nextQuery = jobQueue.shift(); workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery })); }
 wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
 
-// --- TEXT CLASSIFICATION & FILTERING ENGINE (V5) ---
+// --- TEXT CLASSIFICATION & FILTERING ENGINE (V6) ---
 
-// STAGE 1: Strict Topic Filtering
+// STAGE 1: Strict Topic Filtering (with Whole-Word Matching)
 /**
- * Filters results to ensure they contain all essential keywords from the query.
- * This prevents results for "Samsung 24-inch Monitor" from appearing for a "Samsung S24" search.
+ * Filters results to ensure they contain all essential keywords from the query as whole words.
+ * This prevents "s24a600" from matching a search for "s24".
  * @param {Array} results The list of product items.
  * @param {string} query The user's original search query.
  * @returns {Array} A filtered list of results that are on-topic.
  */
 function filterByQueryStrictness(results, query) {
-    // Sanitize and get essential keywords from the query.
-    // We remove common, non-descriptive words.
     const stopWords = new Set(['a', 'an', 'the', 'in', 'on', 'for', 'with', 'and', 'or']);
-    const queryWords = query.toLowerCase().split(' ').filter(word => word.length > 1 && !stopWords.has(word));
+    
+    // Sanitize and get essential keywords from the query.
+    // Also, escape any special regex characters from the user's query.
+    const queryWords = query.toLowerCase()
+        .split(' ')
+        .filter(word => word.length > 1 && !stopWords.has(word))
+        .map(word => word.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')); // Escape special characters
 
-    if (queryWords.length === 0) return results; // Should not happen with valid queries
+    if (queryWords.length === 0) return results;
+
+    // Create a regex for each word that enforces word boundaries (\b).
+    const regexes = queryWords.map(word => new RegExp(`\\b${word}\\b`, 'i')); // 'i' for case-insensitive
 
     return results.filter(item => {
-        const itemTitleLower = item.title.toLowerCase();
-        // Every essential query word must be present in the title.
-        return queryWords.every(word => itemTitleLower.includes(word));
+        // Every regex must find a match in the title.
+        return regexes.every(regex => regex.test(item.title));
     });
 }
 
 
-// STAGE 2: Accessory Classification
+// STAGE 2: Accessory Classification (Unchanged)
 const logProbabilities = {
     priors: { accessory: Math.log(0.4), main: Math.log(0.6) },
     words: {
@@ -162,7 +168,7 @@ app.post('/submit-results', async (req, res) => {
     let pipeline = parsePythonResults(results);
     console.log(`[Start] Received ${pipeline.length} results from scraper for "${query}".`);
 
-    // STAGE 1: Filter for topic relevance.
+    // STAGE 1: Filter for topic relevance using whole-word matching.
     pipeline = filterByQueryStrictness(pipeline, query);
     console.log(`[Filter 1] ${pipeline.length} results remain after strict topic filter.`);
 
