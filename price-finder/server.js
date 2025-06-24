@@ -1,4 +1,4 @@
-// server.js (FINAL V11, with Remote Control Knowledge)
+// server.js (FINAL V12, with "Entity-First" Architecture)
 
 const express = require('express');
 const cors = require('cors');
@@ -55,68 +55,69 @@ function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueu
 wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
 
 
-// --- CONTEXT-AWARE FILTERING ENGINE (V11) ---
+// --- "ENTITY-FIRST" FILTERING ENGINE (V12) ---
 
-// --- KNOWLEDGE BASE FOR SCORING (EXPANDED) ---
-const ACCESSORY_BRANDS = ['uag', 'otterbox', 'spigen', 'zagg', 'mophie', 'lifeproof', 'incipio', 'tech21', 'cygnett', 'efm', '3sixt', 'belkin', 'smallrig', 'stm', 'dbramante1928'];
-const ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control'];
-const ACCESSORY_PRODUCT_LINES = ['pathfinder', 'plyo', 'monarch', 'symmetry', 'defender', 'commuter', 'metropolis', 'plasma', 'monaco', 'copenhagen'];
-const MAIN_PRODUCT_KEYWORDS = ['gb', 'tb', 'unlocked', 'console', 'cellular', 'processor', 'inverter', 'brushless', 'engine', 'hz', 'g-sync', 'freesync', 'watts', 'litres'];
+// --- KNOWLEDGE BASE ---
+const CORE_ENTITIES = {
+    'xbox': {
+        positive: ['console', 'series x', 'series s', '1tb', '2tb', '512gb'],
+        negative: ['controller', 'headset', 'game drive', 'for xbox', 'wired', 'wireless headset', 'play and charge', 'chat link', 'game', 'steering wheel', 'racing wheel', 'flightstick', 'sofa', 'expansion card', 'arcade stick']
+    },
+    'nintendo switch': {
+        positive: ['console', 'oled model', 'lite'],
+        negative: ['game', 'controller', 'case', 'grip', 'dock', 'ac adaptor', 'memory card', 'travel bag', 'joy-con', 'charging grip', 'sports', 'kart', 'zelda', 'mario', 'pokemon', 'animal crossing']
+    },
+    'playstation': {
+        positive: ['console', 'ps5', 'ps4', 'slim', 'pro', '1tb', '825gb'],
+        negative: ['controller', 'headset', 'dual sense', 'game', 'vr', 'camera', 'for playstation', 'pulse 3d']
+    }
+    // This can be expanded with more entities like 'iphone', 'gopro', etc.
+};
 
-// --- INTENT DETECTION ---
-const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe', 'remote', 'remote control'];
-/**
- * Analyzes the user's query to determine their intent.
- * @param {string} query The user's original search query.
- * @returns {'FIND_MAIN_PRODUCT' | 'FIND_ACCESSORY'} The detected intent.
- */
+const GENERIC_ACCESSORY_BRANDS = ['uag', 'otterbox', 'spigen', 'zagg', 'mophie', 'lifeproof', 'incipio', 'tech21', 'cygnett', 'efm', '3sixt', 'belkin', 'smallrig', 'stm', 'dbramante1928', 'razer', 'hyperx', 'logitech', 'steelseries', 'turtle beach', 'astro', 'powera', '8bitdo', 'gamesir'];
+const GENERIC_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control'];
+const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe', 'remote', 'remote control', 'controller', 'headset'];
+
+
+// --- CORE LOGIC ---
 function getQueryIntent(query) {
     const lowerQuery = query.toLowerCase();
-    const hasAccessoryTerm = INTENT_ACCESSORY_KEYWORDS.some(keyword => lowerQuery.includes(keyword));
-    if (hasAccessoryTerm) {
-        return 'FIND_ACCESSORY';
-    }
+    if (INTENT_ACCESSORY_KEYWORDS.some(keyword => lowerQuery.includes(keyword))) return 'FIND_ACCESSORY';
     return 'FIND_MAIN_PRODUCT';
 }
 
-// --- SCORING & FILTERING FUNCTIONS ---
-/**
- * Calculates a relevance score. Only used when intent is FIND_MAIN_PRODUCT.
- * A negative score indicates a likely accessory.
- * @param {string} title The product title.
- * @returns {number} The calculated score.
- */
-function calculateRelevanceScore(title) {
-    const lowerTitle = title.toLowerCase();
-    let score = 0;
-
-    if (ACCESSORY_BRANDS.some(brand => lowerTitle.includes(brand))) score -= 100;
-    if (ACCESSORY_KEYWORDS.some(keyword => lowerTitle.includes(keyword))) score -= 100;
-    if (ACCESSORY_PRODUCT_LINES.some(line => lowerTitle.includes(line))) score -= 50;
-    if (/\bfor\s+(samsung|iphone|google|pixel|galaxy)\b/.test(lowerTitle)) score -= 50;
-
-    for (const keyword of MAIN_PRODUCT_KEYWORDS) {
-        if (lowerTitle.includes(keyword)) score += 20;
-    }
-    return score;
-}
-
-/**
- * Filters results using whole-word matching for the query.
- * @param {Array} results The list of product items.
- * @param {string} query The user's original search query.
- * @returns {Array} A filtered list of results that are on-topic.
- */
 function filterByQueryStrictness(results, query) {
     const stopWords = new Set(['a', 'an', 'the', 'in', 'on', 'for', 'with', 'and', 'or']);
-    const queryWords = query.toLowerCase()
-        .split(' ')
-        .filter(word => word.length > 1 && !stopWords.has(word))
-        .map(word => word.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
-
+    const queryWords = query.toLowerCase().split(' ').filter(word => word.length > 1 && !stopWords.has(word)).map(word => word.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
     if (queryWords.length === 0) return results;
     const regexes = queryWords.map(word => new RegExp(`\\b${word}\\b`, 'i'));
     return results.filter(item => regexes.every(regex => regex.test(item.title)));
+}
+
+function calculateScore(title, query) {
+    const lowerTitle = title.toLowerCase();
+    const lowerQuery = query.toLowerCase();
+    let score = 0;
+
+    // Check if the query matches a known core entity
+    const matchedEntity = Object.keys(CORE_ENTITIES).find(key => lowerQuery.includes(key));
+
+    if (matchedEntity) {
+        // --- Entity-Specific Scoring ---
+        const entityRules = CORE_ENTITIES[matchedEntity];
+        if (entityRules.positive.some(term => lowerTitle.includes(term))) score += 100;
+        if (entityRules.negative.some(term => lowerTitle.includes(term))) score -= 50;
+
+        // Bonus for simple titles, which are often the console itself
+        if (lowerTitle.split(' ').length < 7) score += 20;
+
+    } else {
+        // --- Generic Scoring (Fallback for non-entity searches) ---
+        if (GENERIC_ACCESSORY_BRANDS.some(brand => lowerTitle.includes(brand))) score -= 100;
+        if (GENERIC_ACCESSORY_KEYWORDS.some(keyword => lowerTitle.includes(keyword))) score -= 100;
+    }
+    
+    return score;
 }
 
 // --- UTILITY FUNCTIONS (unchanged) ---
@@ -140,31 +141,33 @@ app.post('/submit-results', async (req, res) => {
     let pipeline = parsePythonResults(results);
     console.log(`[Start] Received ${pipeline.length} results from scraper for "${query}".`);
 
-    // --- CONTEXT-AWARE LOGIC ---
     const intent = getQueryIntent(query);
     console.log(`[Intent Analysis] Detected intent: ${intent}`);
 
-    // STAGE 1: Always apply strict topic filtering to remove wildly irrelevant results.
+    // STAGE 1: Always apply strict topic filtering.
     pipeline = filterByQueryStrictness(pipeline, query);
     console.log(`[Filter 1] ${pipeline.length} results remain after strict topic filter.`);
 
-    // STAGE 2: Apply context-aware filtering based on detected intent.
-    if (intent === 'FIND_MAIN_PRODUCT') {
-        pipeline = pipeline.filter(item => {
-            const score = calculateRelevanceScore(item.title);
-            // console.log(`Score: ${score} | Title: ${item.title}`); // Uncomment for deep debugging
-            return score >= 0;
-        });
-        console.log(`[Filter 2] ${pipeline.length} results remain after accessory scoring.`);
-    } else {
-        // For 'FIND_ACCESSORY' intent, we trust the user knows what they want,
-        // so we don't apply the aggressive negative scoring. The strict filter is enough.
-        console.log(`[Filter 2] Skipping accessory scoring for accessory-focused search.`);
-    }
+    // STAGE 2: Score every item based on the query context.
+    let scoredPipeline = pipeline.map(item => ({
+        ...item,
+        score: calculateScore(item.title, query)
+    }));
     
-    // Final Step: Sort the clean list by price to find the best deals.
-    const processedResults = pipeline.sort((a, b) => a.price - b.price);
-    console.log(`[Sort] Final results have been sorted by price (low to high).`);
+    // If the user is looking for a main product, we can be more aggressive and remove low-scoring items.
+    if (intent === 'FIND_MAIN_PRODUCT') {
+        scoredPipeline = scoredPipeline.filter(item => item.score > -50); // Keep items unless they are strongly identified as accessories.
+        console.log(`[Filter 2] ${scoredPipeline.length} results remain after main product scoring filter.`);
+    }
+
+    // Final Step: The Intelligent Sort. Sort by score (desc), then by price (asc).
+    const processedResults = scoredPipeline.sort((a, b) => {
+        if (a.score !== b.score) {
+            return b.score - a.score;
+        }
+        return a.price - b.price;
+    });
+    console.log(`[Sort] Final results have been intelligently sorted by relevance and price.`);
 
     if (processedResults.length > 0) {
         const resultsWithImages = await enrichResultsWithImages(processedResults, query);
