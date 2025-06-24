@@ -1,4 +1,4 @@
-// server.js (FINAL, with Strict Query-First Filtering)
+// server.js (FINAL, Definitive Version with Negative Filtering)
 
 const express = require('express');
 const cors = require('cors');
@@ -54,12 +54,38 @@ const wss = new WebSocketServer({ server });
 function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueue.length === 0) return; const nextQuery = jobQueue.shift(); workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery })); }
 wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
 
-// --- HELPER FUNCTIONS AND KEYWORDS ---
 
-// This is now the most important filter. It ensures every word from the query is in the title.
-const filterResultsByQuery = (results, query) => {
+// --- FINAL, SIMPLIFIED FILTERING LOGIC ---
+
+// This list contains words that indicate an item is an accessory or is 'for' another product.
+// This is the core of the negative filter.
+const NEGATIVE_KEYWORDS = [
+    'case', 'cover', 'protector', 'screen', 'film', 'glass',
+    'for ', 'fits', 'compatible with', 'designed for',
+    'charger', 'cable', 'adapter', 'stand', 'dock', 'mount', 'holder',
+    'strap', 'band', 'replacement'
+];
+
+/**
+ * Checks if the user's query is intentionally for an accessory.
+ * @param {string} query The user's search query.
+ * @returns {boolean} True if the query likely targets an accessory.
+ */
+function isAccessorySearch(query) {
     const queryLower = query.toLowerCase();
-    const queryWords = queryLower.split(' ').filter(w => w.length > 0);
+    // A simplified list to check user intent.
+    const accessoryIntentKeywords = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand'];
+    return accessoryIntentKeywords.some(keyword => queryLower.includes(keyword));
+}
+
+/**
+ * The primary filter. Ensures all words from the user's query are present in the title.
+ * @param {Array<Object>} results The list of results.
+ * @param {string} query The user's search query.
+ * @returns {Array<Object>} Filtered results.
+ */
+const filterByQueryStrict = (results, query) => {
+    const queryWords = query.toLowerCase().split(' ').filter(w => w.length > 0);
     if (queryWords.length === 0) return results;
 
     return results.filter(item => {
@@ -68,19 +94,21 @@ const filterResultsByQuery = (results, query) => {
     });
 };
 
-const ACCESSORY_KEYWORDS = ['case', 'protector', 'charger', 'cable', 'adapter', 'stand', 'dock', 'strap', 'band', 'film', 'glass', 'cover', 'mount', 'holder'];
-
-// This filter is only used as a secondary cleanup step.
-const filterForIrrelevantAccessories = (results) => {
-    return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword)));
+/**
+ * Aggressively removes any item that appears to be an accessory or is "for" another product.
+ * @param {Array<Object>} results The list of results to clean.
+ * @returns {Array<Object>} The cleaned list, containing only main products.
+ */
+const filterOutAccessories = (results) => {
+    return results.filter(item => {
+        const itemTitle = item.title.toLowerCase();
+        // If the title contains ANY of the negative keywords, discard it.
+        return !NEGATIVE_KEYWORDS.some(keyword => itemTitle.includes(keyword));
+    });
 };
 
-// This function determines if the user is *intentionally* looking for an accessory.
-const detectAccessorySearchIntent = (query) => {
-    const queryLower = query.toLowerCase();
-    return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword));
-};
 
+// --- UTILITY FUNCTIONS (unchanged) ---
 const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); const REFURBISHED_KEYWORDS = ['refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new']; return REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword)) ? 'Refurbished' : 'New'; };
 const extractColorFromTitle = (title) => { const lowerCaseTitle = title.toLowerCase(); const COLOR_LIST = ['black', 'white', 'silver', 'gold', 'gray', 'blue', 'red', 'green', 'pink', 'purple', 'yellow', 'orange', 'bronze', 'graphite', 'sierra', 'alpine', 'starlight', 'midnight']; for (const color of COLOR_LIST) { if (lowerCaseTitle.includes(color)) return color; } return null; };
 function parsePythonResults(results) { return results.map(item => { const fullText = item.title; const priceMatch = fullText.match(/\$\s?[\d,]+(\.\d{2})?/); const priceString = priceMatch ? priceMatch[0] : null; const price = priceString ? parseFloat(priceString.replace(/[^0-9.]/g, '')) : null; if (!price) return null; const store = fullText.split(' ')[0]; return { title: fullText, price: price, price_string: priceString, store: store, url: item.url || '#' }; }).filter(Boolean); }
@@ -88,11 +116,11 @@ async function enrichResultsWithImages(results, baseQuery) { if (results.length 
 async function fetchImageForQuery(query) { const cacheKey = query.toLowerCase(); if (imageCache.has(cacheKey)) { return imageCache.get(cacheKey); } const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A'; if (!GOOGLE_API_KEY || !GOOGLE_CSE_ID) { return placeholder; } try { const response = await limit(() => { const url = `https://www.googleapis.com/customsearch/v1`; const params = { key: GOOGLE_API_KEY, cx: GOOGLE_CSE_ID, q: query, searchType: 'image', num: 1 }; return axios.get(url, { params }); }); const imageUrl = response.data.items?.[0]?.link || placeholder; imageCache.set(cacheKey, imageUrl); await saveImageCacheToFile(); return imageUrl; } catch (error) { console.error(`[FATAL] Google Image Search request failed for query: "${query}"`); if (error.response) { console.error('Error Data:', JSON.stringify(error.response.data, null, 2)); } else { console.error('Error Message:', error.message); } return placeholder; } }
 
 
-// --- API Endpoints ---
+// --- API ENDPOINTS ---
 app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } const normalizedQuery = query.toLowerCase().trim(); if (normalizedQuery) { const currentCount = searchTermFrequency.get(normalizedQuery) || 0; searchTermFrequency.set(normalizedQuery, currentCount + 1); } } catch (e) { console.error("Error logging traffic:", e); } const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData.results); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
 app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey).results); } else { return res.status(202).send(); }});
 
-// --- REWRITTEN: /submit-results with the final, simplified logic ---
+// --- REWRITTEN: /submit-results with the final, definitive logic ---
 app.post('/submit-results', async (req, res) => {
     const { secret, query, results } = req.body;
     if (secret !== SERVER_SIDE_SECRET) { return res.status(403).send('Forbidden'); }
@@ -100,31 +128,30 @@ app.post('/submit-results', async (req, res) => {
     res.status(200).send('Results received. Processing now.');
 
     let pipeline = parsePythonResults(results);
+    console.log(`[Start] Received ${pipeline.length} results from scraper for "${query}".`);
 
-    // STEP 1: Apply the strict, literal filter. This is the most important step.
-    console.log(`[Filter] Applying strict query filter for "${query}"...`);
-    pipeline = filterResultsByQuery(pipeline, query);
-    console.log(`[Filter] Found ${pipeline.length} items containing all query words.`);
+    // STEP 1: Strict query matching. This is the foundation.
+    pipeline = filterByQueryStrict(pipeline, query);
+    console.log(`[Filter 1] ${pipeline.length} results remain after strict query filter.`);
 
-    // STEP 2: Detect user intent. Are they looking for an accessory?
-    const isAccessorySearch = detectAccessorySearchIntent(query);
-
-    // STEP 3: If they are NOT looking for an accessory, clean up any that slipped through.
-    if (!isAccessorySearch && pipeline.length > 0) {
-        console.log(`[Filter] This is a main product search. Removing accessories...`);
-        pipeline = filterForIrrelevantAccessories(pipeline);
-        console.log(`[Filter] ${pipeline.length} items remain after accessory cleanup.`);
+    // STEP 2: Check if the user *wants* accessories.
+    if (!isAccessorySearch(query)) {
+        // If not, be ruthless in removing them.
+        console.log(`[Filter 2] Main product search detected. Applying negative filter to remove accessories.`);
+        pipeline = filterOutAccessories(pipeline);
+        console.log(`[Filter 2] ${pipeline.length} results remain after negative filter.`);
     } else {
-        console.log(`[Filter] This is an accessory search. Skipping accessory cleanup.`);
+        console.log(`[Filter 2] Accessory search detected. Skipping negative filter.`);
     }
 
+    // STEP 3: Process the final, clean results.
     if (pipeline.length > 0) {
         const resultsWithImages = await enrichResultsWithImages(pipeline, query);
         const sortedResults = resultsWithImages.sort((a, b) => a.price - b.price).map(item => ({ ...item, condition: detectItemCondition(item.title) }));
         searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
         console.log(`[Success] Processed and cached ${sortedResults.length} relevant results for "${query}".`);
     } else {
-        console.log(`[Filter] No relevant results found for "${query}" after all filtering. Caching empty result.`);
+        console.log(`[Finish] No relevant results found for "${query}" after all filtering. Caching empty result.`);
         searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
     }
 });
