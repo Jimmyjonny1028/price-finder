@@ -1,4 +1,4 @@
-// server.js (FINAL V10, with Final Knowledge Base Tuning)
+// server.js (FINAL V11, with Remote Control Knowledge)
 
 const express = require('express');
 const cors = require('cors');
@@ -55,16 +55,16 @@ function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueu
 wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
 
 
-// --- CONTEXT-AWARE FILTERING ENGINE (V10) ---
+// --- CONTEXT-AWARE FILTERING ENGINE (V11) ---
 
 // --- KNOWLEDGE BASE FOR SCORING (EXPANDED) ---
 const ACCESSORY_BRANDS = ['uag', 'otterbox', 'spigen', 'zagg', 'mophie', 'lifeproof', 'incipio', 'tech21', 'cygnett', 'efm', '3sixt', 'belkin', 'smallrig', 'stm', 'dbramante1928'];
-const ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged'];
+const ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control'];
 const ACCESSORY_PRODUCT_LINES = ['pathfinder', 'plyo', 'monarch', 'symmetry', 'defender', 'commuter', 'metropolis', 'plasma', 'monaco', 'copenhagen'];
 const MAIN_PRODUCT_KEYWORDS = ['gb', 'tb', 'unlocked', 'console', 'cellular', 'processor', 'inverter', 'brushless', 'engine', 'hz', 'g-sync', 'freesync', 'watts', 'litres'];
 
 // --- INTENT DETECTION ---
-const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe'];
+const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe', 'remote', 'remote control'];
 /**
  * Analyzes the user's query to determine their intent.
  * @param {string} query The user's original search query.
