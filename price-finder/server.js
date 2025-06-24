@@ -1,4 +1,4 @@
-// server.js (FINAL, Definitive Version with Dynamic Filtering and Price Sorting)
+// server.js (FINAL, Definitive Version with Text Classifier)
 
 const express = require('express');
 const cors = require('cors');
@@ -16,7 +16,7 @@ const server = http.createServer(app);
 
 let limit;
 
-// Caches and State
+// Caches and State (unchanged)
 const searchCache = new Map();
 let imageCache = new Map();
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
@@ -54,66 +54,90 @@ const wss = new WebSocketServer({ server });
 function dispatchJob() { if (isQueueProcessingPaused || !workerSocket || jobQueue.length === 0) return; const nextQuery = jobQueue.shift(); workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery })); }
 wss.on('connection', (ws, req) => { const parsedUrl = url.parse(req.url, true); const secret = parsedUrl.query.secret; if (secret !== SERVER_SIDE_SECRET) { ws.close(); return; } console.log("✅ A concurrent worker has connected."); workerSocket = ws; workerActiveJobs.clear(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'REQUEST_JOB') { dispatchJob(); } else if (msg.type === 'JOB_STARTED') { workerActiveJobs.add(msg.query); } else if (msg.type === 'JOB_COMPLETE') { workerActiveJobs.delete(msg.query); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The worker has disconnected."); workerSocket = null; workerActiveJobs.clear(); }); });
 
+// --- TEXT CLASSIFICATION ENGINE (V4 - NO PRICE FILTERING) ---
 
-// --- DYNAMIC RELEVANCE & FILTERING LOGIC (V3 - Scalable) ---
+// This is our "knowledge base". It contains the log probabilities of a word
+// appearing in an "accessory" title or a "main product" title.
+// Higher numbers mean more likely. Using logs turns multiplication into addition.
+const logProbabilities = {
+    // Prior probabilities: Accessories are common, but main products are what we're after.
+    priors: {
+        accessory: Math.log(0.4),
+        main: Math.log(0.6)
+    },
+    // Word probabilities
+    words: {
+        // --- Strong Accessory Indicators ---
+        'case': { accessory: Math.log(0.9), main: Math.log(0.001) },
+        'cover': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'for': { accessory: Math.log(0.7), main: Math.log(0.1) }, // "for" can appear in main titles sometimes
+        'protector': { accessory: Math.log(0.9), main: Math.log(0.001) },
+        'screen': { accessory: Math.log(0.8), main: Math.log(0.05) }, // e.g., "Screen size"
+        'film': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'glass': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'fits': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'compatible': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'charger': { accessory: Math.log(0.9), main: Math.log(0.01) },
+        'cable': { accessory: Math.log(0.9), main: Math.log(0.01) },
+        'adapter': { accessory: Math.log(0.9), main: Math.log(0.01) },
+        'stand': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'dock': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'mount': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'holder': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'strap': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'band': { accessory: Math.log(0.8), main: Math.log(0.01) },
+        'replacement': { accessory: Math.log(0.7), main: Math.log(0.05) },
+        'kit': { accessory: Math.log(0.6), main: Math.log(0.1) },
+        'skin': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'decal': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'pints': { accessory: Math.log(0.9), main: Math.log(0.001) },
+        'tub': { accessory: Math.log(0.9), main: Math.log(0.001) },
+        'lids': { accessory: Math.log(0.9), main: Math.log(0.001) },
+        'blade': { accessory: Math.log(0.7), main: Math.log(0.01) },
+        'attachment': { accessory: Math.log(0.8), main: Math.log(0.001) },
+        'pack': { accessory: Math.log(0.6), main: Math.log(0.05) },
+        // --- Strong Accessory Brands ---
+        'otterbox': { accessory: Math.log(0.95), main: Math.log(0.0001) },
+        'spigen': { accessory: Math.log(0.95), main: Math.log(0.0001) },
+        'zagg': { accessory: Math.log(0.95), main: Math.log(0.0001) },
+        'belkin': { accessory: Math.log(0.9), main: Math.log(0.001) }, // Belkin makes some devices too
+        
+        // --- Strong Main Product Indicators ---
+        'gb': { accessory: Math.log(0.01), main: Math.log(0.8) },
+        'tb': { accessory: Math.log(0.01), main: Math.log(0.8) },
+        'unlocked': { accessory: Math.log(0.01), main: Math.log(0.7) },
+        'console': { accessory: Math.log(0.05), main: Math.log(0.8) },
+        'cellular': { accessory: Math.log(0.05), main: Math.log(0.7) },
+        'processor': { accessory: Math.log(0.01), main: Math.log(0.6) },
+        'core': { accessory: Math.log(0.1), main: Math.log(0.5) }, // can be "hard-core case"
+        'inverter': { accessory: Math.log(0.01), main: Math.log(0.8) },
+        'brushless': { accessory: Math.log(0.01), main: Math.log(0.8) },
+        'engine': { accessory: Math.log(0.01), main: Math.log(0.7) }
+    },
+    // Default probability for unknown words (smoothing)
+    unknown: { accessory: Math.log(0.01), main: Math.log(0.01) }
+};
+
 /**
- * Analyzes an entire set of search results to dynamically score and filter them for relevance.
- * This approach does not rely on hardcoded keyword lists.
- *
- * @param {Array} results - The array of parsed result objects from the scraper.
- * @param {string} query - The original user search query.
- * @returns {Array} - A clean array of relevant results, sorted by relevance score.
+ * Classifies a title as 'accessory' or 'main' based on word probabilities.
+ * @param {string} title - The product title to classify.
+ * @returns {string} - Either 'accessory' or 'main'.
  */
-function processAndScoreResults(results, query) {
-    if (results.length === 0) {
-        return [];
+function classifyTitle(title) {
+    let accessoryScore = logProbabilities.priors.accessory;
+    let mainScore = logProbabilities.priors.main;
+
+    const words = title.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/);
+
+    for (const word of words) {
+        const probs = logProbabilities.words[word] || logProbabilities.unknown;
+        accessoryScore += probs.accessory;
+        mainScore += probs.main;
     }
 
-    // --- Step 1: Price Distribution Analysis ---
-    const prices = results.map(r => r.price).sort((a, b) => a - b);
-    const medianPrice = prices[Math.floor(prices.length / 2)];
-    const dynamicAccessoryThreshold = Math.max(medianPrice * 0.4, 30);
-    
-    console.log(`[Dynamic Analysis] Median Price: $${medianPrice.toFixed(2)}. Calculated Accessory Threshold: $${dynamicAccessoryThreshold.toFixed(2)}`);
-
-    const queryWords = new Set(query.toLowerCase().split(' ').filter(w => w.length > 2));
-
-    // --- Step 2: Score Each Item Individually ---
-    const scoredResults = results.map(item => {
-        let score = 100;
-        const titleWords = item.title.toLowerCase().split(' ');
-
-        if (item.price < dynamicAccessoryThreshold) {
-            score -= 80;
-        }
-
-        const wordDelta = titleWords.length - queryWords.size;
-        if (wordDelta > 3) {
-            score -= wordDelta * 5;
-        }
-
-        let foreignWords = 0;
-        for (const word of titleWords) {
-            if (!queryWords.has(word)) {
-                foreignWords++;
-            }
-        }
-        const foreignRatio = foreignWords / titleWords.length;
-        if (foreignRatio > 0.6) {
-            score -= 50;
-        }
-
-        const hasAllQueryWords = [...queryWords].every(qw => item.title.toLowerCase().includes(qw));
-        if (!hasAllQueryWords) {
-             score -= 100;
-        }
-
-        return { ...item, relevanceScore: score };
-    });
-
-    // --- Step 3: Filter and Final Sort (by relevance) ---
-    const relevantResults = scoredResults.filter(item => item.relevanceScore > 0);
-    return relevantResults.sort((a, b) => b.relevanceScore - a.relevanceScore);
+    // Add a slight bias towards classifying as 'main' to reduce false positives
+    // i.e., an accessory needs to be 'confidently' an accessory.
+    return accessoryScore > mainScore + Math.log(1.5) ? 'accessory' : 'main';
 }
 
 
@@ -138,12 +162,17 @@ app.post('/submit-results', async (req, res) => {
     const pipeline = parsePythonResults(results);
     console.log(`[Start] Received ${pipeline.length} results from scraper for "${query}".`);
 
-    // Use the dynamic function to filter out irrelevant results.
-    const relevantResults = processAndScoreResults(pipeline, query);
-    console.log(`[Filter] ${relevantResults.length} relevant results remain after dynamic scoring.`);
+    // Use the new text classifier to filter out accessories.
+    const classifiedResults = pipeline.filter(item => {
+        const classification = classifyTitle(item.title);
+        // Uncomment the line below for detailed debugging of the classifier
+        // console.log(`[Classifier] Title: "${item.title}" -> ${classification.toUpperCase()}`);
+        return classification === 'main';
+    });
+    console.log(`[Filter] ${classifiedResults.length} relevant results remain after classification.`);
 
     // Re-sort the final, clean list by price to find the best deals.
-    const processedResults = relevantResults.sort((a, b) => a.price - b.price);
+    const processedResults = classifiedResults.sort((a, b) => a.price - b.price);
     console.log(`[Sort] Final results have been sorted by price (low to high).`);
 
     if (processedResults.length > 0) {
@@ -170,20 +199,7 @@ app.post('/admin/toggle-queue', (req, res) => { const { code } = req.body; if (!
 app.post('/admin/clear-queue', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); jobQueue.length = 0; console.log("ADMIN ACTION: Job queue has been cleared."); res.json({ message: 'Job queue has been cleared successfully.' }); });
 app.post('/admin/disconnect-worker', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); if (workerSocket) { workerSocket.close(); console.log("ADMIN ACTION: Forcibly disconnected the worker."); res.json({ message: 'Worker has been disconnected.' }); } else { res.status(404).json({ message: 'No worker is currently connected.' }); } });
 app.post('/admin/clear-image-cache', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); imageCache.clear(); await saveImageCacheToFile(); console.log("ADMIN ACTION: Permanent image cache has been cleared."); res.json({ message: 'The permanent image cache has been cleared.' }); });
-
-app.post('/admin/clear-stats', (req, res) => {
-    const { code } = req.body;
-    if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' });
-    
-    trafficLog.totalSearches = 0;
-    trafficLog.uniqueVisitors.clear();
-    trafficLog.searchHistory = [];
-    searchTermFrequency.clear();
-    
-    console.log("ADMIN ACTION: All traffic stats and search history have been cleared.");
-    res.json({ message: 'All traffic stats and search history have been cleared.' });
-});
-
+app.post('/admin/clear-stats', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); trafficLog.totalSearches = 0; trafficLog.uniqueVisitors.clear(); trafficLog.searchHistory = []; searchTermFrequency.clear(); console.log("ADMIN ACTION: All traffic stats and search history have been cleared."); res.json({ message: 'All traffic stats and search history have been cleared.' }); });
 app.post('/admin/set-theme', async (req, res) => { const { code, theme } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const validThemes = ['default', 'dark', 'retro', 'sepia', 'solarized', 'synthwave']; if (theme && validThemes.includes(theme)) { liveState.theme = theme; await updateLiveStateFile(); console.log(`ADMIN ACTION: Global theme changed to "${theme}".`); res.json({ message: `Theme changed to ${theme}.` }); } else { res.status(400).json({ error: 'Invalid theme specified.' }); } });
 app.post('/admin/trigger-rain', async (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); liveState.rainEventTimestamp = Date.now(); await updateLiveStateFile(); console.log("ADMIN ACTION: Triggered global 'Make It Rain' event."); res.json({ message: 'Rain event triggered for all active users.' }); });
 
