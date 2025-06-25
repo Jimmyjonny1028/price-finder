@@ -1,0 +1,12 @@
+# www.robotstxt.org/
+
+User-agent: *
+# Allow all crawlers to access the site by default
+Allow: /
+
+# Disallow crawlers from accessing the admin panel and its functions
+Disallow: /admin/
+Disallow: /admin-panel
+
+# Sitemap location
+Sitemap: https://deal-finder-12dw.onrender.com/sitemap.xml
