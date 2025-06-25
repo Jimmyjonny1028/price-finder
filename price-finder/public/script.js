@@ -107,7 +107,10 @@ async function handleSearch(event) {
     loader.classList.remove('hidden');
     loader.classList.remove('polling');
     if (loadingInterval) clearInterval(loadingInterval);
-    loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000);
+    loadingInterval = setInterval(() => {
+        messageIndex = (messageIndex + 1) % loadingMessages.length;
+        loaderText.textContent = loadingMessages[messageIndex];
+    }, 5000);
     try {
         const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`);
         if (!response.ok) { throw new Error('Server search request failed.'); }
@@ -165,12 +168,8 @@ function pollForResults(query, attempt = 1) {
 }
 
 function processResults(data, query) {
-    // This now correctly handles the two types of responses from the server:
-    // 1. A direct array of results: `[...]`
-    // 2. An object with a suggestion: `{ results: [], suggestion: '...' }`
-    fullResults = data.results || (Array.isArray(data) ? data : []);
+    fullResults = data.results || [];
     const suggestion = data.suggestion;
-
     if (fullResults.length === 0) {
         showFailureMessage(query, suggestion || null);
     } else {
