@@ -1,4 +1,4 @@
-// server.js (FINAL, with Fixed Public API Key)
+// server.js (FINAL, with Single-Request API Logic)
 
 const express = require('express');
 const cors = require('cors');
@@ -9,15 +9,20 @@ const url = require('url');
 const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
+const { randomUUID } = require('crypto');
+const EventEmitter = require('events');
 
 const app = express();
 const PORT = 5000;
 const server = http.createServer(app);
 
+const apiEventEmitter = new EventEmitter();
+apiEventEmitter.setMaxListeners(30);
+
 let limit;
 app.set('trust proxy', true);
 
-// Caches and State
+// --- Caches, State, and Constants ---
 const searchCache = new Map();
 let imageCache = new Map();
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
@@ -39,17 +44,10 @@ let liveState = {
 const IMAGE_CACHE_PATH = path.join(__dirname, 'image_cache.json');
 const LIVE_STATE_PATH = path.join(__dirname, 'public', 'live_state.json');
 
-// --- APP & MIDDLEWARE SETUP ---
-app.use(express.json({ limit: '10mb' }));
-app.use(cors());
-app.use(express.static('public'));
-
-// --- CONSTANTS ---
 const ADMIN_CODE = process.env.ADMIN_CODE;
 const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID;
-// --- THE CHANGE IS HERE: Using your fixed public API key ---
 const PUBLIC_API_KEY = process.env.PUBLIC_API_KEY || '608b75a6-ce94-46ba-830a-098a21b87816';
 
 const CORE_ENTITIES = {
@@ -60,6 +58,12 @@ const CORE_ENTITIES = {
 const GENERIC_ACCESSORY_BRANDS = ['uag', 'otterbox', 'spigen', 'zagg', 'mophie', 'lifeproof', 'incipio', 'tech21', 'cygnett', 'efm', '3sixt', 'belkin', 'smallrig', 'stm', 'dbramante1928', 'razer', 'hyperx', 'logitech', 'steelseries', 'turtle beach', 'astro', 'powera', '8bitdo', 'gamesir'];
 const GENERIC_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control'];
 const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe', 'remote', 'remote control', 'controller', 'headset'];
+
+// --- APP & MIDDLEWARE SETUP ---
+app.use(express.json({ limit: '10mb' }));
+app.use(cors());
+app.use(express.static('public'));
+
 
 // --- Rate Limiting Middleware ---
 const rateLimitTracker = new Map();
@@ -198,7 +202,15 @@ app.get('/api/search', apiRateLimiter, async (req, res) => {
         const cachedData = searchCache.get(cacheKey);
         return res.json(cachedData.results || []);
     }
-    res.status(202).json({ message: 'Results are being generated. Please try your request again in a moment.' });
+    const eventName = `jobComplete:${cacheKey}`;
+    const timeout = setTimeout(() => {
+        apiEventEmitter.removeAllListeners(eventName);
+        res.status(504).json({ error: 'Request timed out waiting for scraper results.' });
+    }, 90000);
+    apiEventEmitter.once(eventName, (results) => {
+        clearTimeout(timeout);
+        res.json(results);
+    });
     if (workerSocket) {
         const isQueued = jobQueue.includes(query);
         const isActive = workerActiveJobs.has(query);
@@ -206,6 +218,10 @@ app.get('/api/search', apiRateLimiter, async (req, res) => {
             jobQueue.push(query);
             workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' }));
         }
+    } else {
+         clearTimeout(timeout);
+         apiEventEmitter.removeAllListeners(eventName);
+         res.status(503).json({ error: 'Service is temporarily unavailable. No scraper is connected.' });
     }
 });
 app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } const normalizedQuery = query.toLowerCase().trim(); if (normalizedQuery) { const currentCount = searchTermFrequency.get(normalizedQuery) || 0; searchTermFrequency.set(normalizedQuery, currentCount + 1); } } catch (e) { console.error("Error logging traffic:", e); } const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
@@ -236,20 +252,25 @@ app.post('/submit-results', async (req, res) => {
         return a.price - b.price;
     });
     console.log(`[Sort] Final results have been intelligently sorted by relevance and price.`);
+    let finalPayload = { results: [] };
     if (processedResults.length > 0) {
         const finalResults = await enrichResultsWithImages(processedResults, query).then(res => res.map(item => ({ ...item, condition: detectItemCondition(item.title) })));
-        searchCache.set(query.toLowerCase(), { results: finalResults, timestamp: Date.now() });
+        finalPayload.results = finalResults;
+        searchCache.set(query.toLowerCase(), finalPayload);
         console.log(`[Success] Processed and cached ${finalResults.length} deals for "${query}".`);
     } else {
         const simplifiedQuery = simplifyQuery(query);
         if (simplifiedQuery) {
+            finalPayload.suggestion = simplifiedQuery;
             console.log(`[Suggestion] No results found. Suggesting simplified query: "${simplifiedQuery}"`);
-            searchCache.set(query.toLowerCase(), { results: [], suggestion: simplifiedQuery, timestamp: Date.now() });
         } else {
             console.log(`[Finish] No relevant results found and query cannot be simplified.`);
-            searchCache.set(query.toLowerCase(), { results: [], timestamp: Date.now() });
         }
+        searchCache.set(query.toLowerCase(), finalPayload);
     }
+    const cacheKey = query.toLowerCase();
+    const eventName = `jobComplete:${cacheKey}`;
+    apiEventEmitter.emit(eventName, finalPayload.results);
 });
 app.post('/api/ping', (req, res) => { const { sessionID } = req.body; if (!sessionID) return res.status(400).send(); if (onlineUserTimeouts.has(sessionID)) { clearTimeout(onlineUserTimeouts.get(sessionID)); } const timeoutID = setTimeout(() => { onlineUserTimeouts.delete(sessionID); updateLiveStateFile(); }, USER_ONLINE_TIMEOUT_MS); onlineUserTimeouts.set(sessionID, timeoutID); updateLiveStateFile(); res.status(200).json({ status: 'ok' }); });
 app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const topSearches = [...searchTermFrequency.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([term, count]) => ({ term, count })); res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory, isServiceDisabled: isMaintenanceModeEnabled, workerStatus: workerSocket ? 'Connected' : 'Disconnected', activeJobs: Array.from(workerActiveJobs), jobQueue: jobQueue, isQueuePaused: isQueueProcessingPaused, imageCacheSize: imageCache.size, currentTheme: liveState.theme, onlineUsers: liveState.onlineUsers, topSearches: topSearches }); });
