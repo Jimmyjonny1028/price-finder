@@ -97,7 +97,6 @@ async function loadImageCacheFromFile() { try { await fs.access(IMAGE_CACHE_PATH
 async function saveImageCacheToFile() { try { const plainObject = Object.fromEntries(imageCache); const jsonString = JSON.stringify(plainObject, null, 2); await fs.writeFile(IMAGE_CACHE_PATH, jsonString, 'utf8'); } catch (error) { console.error('Error saving image cache to file:', error); } }
 
 let lastOzbargainCallTimestamp = 0;
-const OZbARGAIN_COOLDOWN_MS = 60 * 1000;
 async function fetchOzbargainBackup(query) {
     const now = Date.now();
     if (now - lastOzbargainCallTimestamp < OZbARGAIN_COOLDOWN_MS) {
@@ -153,6 +152,7 @@ function filterByQueryStrictness(results, query) {
     return results.filter(item => regexes.every(regex => regex.test(item.title)));
 }
 
+// --- REVISED SCORING LOGIC ---
 function calculateScore(title, query) {
     const lowerTitle = title.toLowerCase();
     const lowerQuery = query.toLowerCase();
@@ -165,19 +165,19 @@ function calculateScore(title, query) {
         }
     }
     
-    // Subtract points for strong negative signals
+    // Subtract points for strong negative signals (accessory brands)
     if (GENERIC_ACCESSORY_BRANDS.some(brand => lowerTitle.includes(brand))) {
         score -= 100;
     }
     
-    // Subtract points for accessory keywords, but only if they weren't part of the user's search
+    // Subtract points for accessory keywords, but only if they weren't part of the user's specific search
     for (const keyword of GENERIC_ACCESSORY_KEYWORDS) {
         if (lowerTitle.includes(keyword) && !lowerQuery.includes(keyword)) {
             score -= 100;
         }
     }
 
-    // Apply special rules for major platforms
+    // Special handling for major platforms
     const matchedEntity = Object.keys(CORE_ENTITIES).find(key => lowerQuery.includes(key));
     if (matchedEntity) {
         const entityRules = CORE_ENTITIES[matchedEntity];
@@ -281,7 +281,7 @@ app.post('/submit-results', async (req, res) => {
     if (processedResults.length > 0) {
         const finalResults = await enrichResultsWithImages(processedResults, query).then(res => res.map(item => ({ ...item, condition: detectItemCondition(item.title) })));
         finalPayload.results = finalResults;
-        searchCache.set(query.toLowerCase(), { ...finalPayload, timestamp: Date.now() });
+        searchCache.set(query.toLowerCase(), finalPayload);
         console.log(`[Success] Processed and cached ${finalResults.length} deals for "${query}".`);
     } else {
         const simplifiedQuery = simplifyQuery(query);
