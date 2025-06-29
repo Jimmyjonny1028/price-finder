@@ -1,6 +1,6 @@
 // public/script.js (FINAL, with all features and fixes)
 
-// --- Element Selection (Complete) ---
+// --- Element Selection ---
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
 const searchButton = document.getElementById('search-button');
@@ -20,6 +20,13 @@ const themeNotificationEl = document.getElementById('theme-notification');
 const adminButton = document.getElementById('admin-button');
 const adminPanel = document.getElementById('admin-panel');
 const closeAdminPanel = document.getElementById('close-admin-panel');
+const getApiKeyButton = document.getElementById('get-api-key-button');
+const apiKeyModal = document.getElementById('api-key-modal');
+const closeApiKeyModal = document.getElementById('close-api-key-modal');
+const apiKeyDisplayArea = document.getElementById('api-key-display-area');
+const copyApiKeyButton = document.getElementById('copy-api-key-button');
+const apiStatsContainer = document.getElementById('api-stats-container');
+const refreshStatsButton = document.getElementById('refresh-stats-button');
 const totalSearchesEl = document.getElementById('total-searches');
 const uniqueVisitorsEl = document.getElementById('unique-visitors');
 const usersOnlineEl = document.getElementById('users-online');
@@ -49,12 +56,6 @@ const adminPermanentMessageInput = document.getElementById('permanent-message-in
 const adminClearPermanentMessageButton = document.getElementById('clear-permanent-message-button');
 const adminFlashMessageForm = document.getElementById('flash-message-form');
 const adminFlashMessageInput = document.getElementById('flash-message-input');
-const apiAccessButton = document.getElementById('api-access-button');
-const apiPanel = document.getElementById('api-panel');
-const closeApiPanel = document.getElementById('close-api-panel');
-const generateKeyButton = document.getElementById('generate-key-button');
-const apiKeyDisplay = document.getElementById('api-key-display');
-const apiKeyCode = document.getElementById('api-key-code');
 
 // --- Global State ---
 let fullResults = [];
@@ -70,13 +71,7 @@ let currentAdminCode = null;
 
 // --- Main Event Listeners ---
 searchForm.addEventListener('submit', handleSearch);
-resultsContainer.addEventListener('click', (event) => {
-    if (event.target.classList.contains('suggestion-link')) {
-        event.preventDefault();
-        searchInput.value = event.target.textContent;
-        handleSearch(new Event('submit'));
-    }
-});
+resultsContainer.addEventListener('click', (event) => { if (event.target.classList.contains('suggestion-link')) { event.preventDefault(); searchInput.value = event.target.textContent; handleSearch(new Event('submit')); } });
 sortSelect.addEventListener('change', applyFiltersAndSort);
 conditionFilterSelect.addEventListener('change', applyFiltersAndSort);
 storeFilterButton.addEventListener('click', () => { storeFilterPanel.classList.toggle('hidden'); });
@@ -86,28 +81,25 @@ storeFilterList.addEventListener('change', (event) => { if (event.target.type ==
 document.addEventListener('click', (event) => { if (!storeFilterButton.contains(event.target) && !storeFilterPanel.contains(event.target)) { storeFilterPanel.classList.add('hidden'); } });
 adminButton.addEventListener('click', () => { const code = prompt("Please enter the admin code:"); if (code) { fetchAdminData(code); } });
 closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'none'; });
-apiAccessButton.addEventListener('click', () => { apiPanel.style.display = 'flex'; });
-closeApiPanel.addEventListener('click', () => { apiPanel.style.display = 'none'; });
-generateKeyButton.addEventListener('click', requestApiKey);
 adminPanel.addEventListener('click', (event) => { if (event.target === adminPanel) { adminPanel.style.display = 'none'; } });
+getApiKeyButton.addEventListener('click', showApiKeyModal);
+closeApiKeyModal.addEventListener('click', () => { apiKeyModal.style.display = 'none'; });
+copyApiKeyButton.addEventListener('click', copyApiKey);
+refreshStatsButton.addEventListener('click', fetchAndDisplayStats);
 
 // --- Core Application Logic ---
 function showFailureMessage(originalQuery, suggestion = null) {
     let message = `<p>Sorry! Our database doesnt currently contain this product or a error has occured please try again later.</p>`;
     if (suggestion && originalQuery) {
-        const suggestionLink = `<a href="#" class="suggestion-link">${suggestion}</a>`;
+        const suggestionLink = `<a href="#" class="suggestion-link" style="color:var(--primary-color);text-decoration:underline;">${suggestion}</a>`;
         message += `<p style="margin-top: 15px;">Maybe try just searching the model. <br>I.e. "${originalQuery}" becomes ${suggestionLink}.</p>`;
     }
     resultsContainer.innerHTML = message;
 }
-
 async function handleSearch(event) {
     if (event) event.preventDefault();
     const searchTerm = searchInput.value.trim();
-    if (!searchTerm) {
-        resultsContainer.innerHTML = '<p>Please enter a product to search for.</p>';
-        return;
-    }
+    if (!searchTerm) { resultsContainer.innerHTML = '<p>Please enter a product to search for.</p>'; return; }
     searchButton.disabled = true;
     controlsContainer.style.display = 'none';
     resultsContainer.innerHTML = '';
@@ -116,10 +108,7 @@ async function handleSearch(event) {
     loader.classList.remove('hidden');
     loader.classList.remove('polling');
     if (loadingInterval) clearInterval(loadingInterval);
-    loadingInterval = setInterval(() => {
-        messageIndex = (messageIndex + 1) % loadingMessages.length;
-        loaderText.textContent = loadingMessages[messageIndex];
-    }, 5000);
+    loadingInterval = setInterval(() => { messageIndex = (messageIndex + 1) % loadingMessages.length; loaderText.textContent = loadingMessages[messageIndex]; }, 5000);
     try {
         const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`);
         if (!response.ok) { throw new Error('Server search request failed.'); }
@@ -141,7 +130,6 @@ async function handleSearch(event) {
         }
     }
 }
-
 function pollForResults(query, attempt = 1) {
     const maxAttempts = 60;
     const interval = 5000;
@@ -175,7 +163,6 @@ function pollForResults(query, attempt = 1) {
         clearInterval(loadingInterval);
     });
 }
-
 function processResults(data, query) {
     fullResults = data.results || [];
     const suggestion = data.suggestion;
@@ -186,44 +173,75 @@ function processResults(data, query) {
         applyFiltersAndSort();
     }
 }
-
 function applyFiltersAndSort() { const sortBy = sortSelect.value; const conditionFilter = conditionFilterSelect.value; let processedResults = [...fullResults]; if (conditionFilter === 'new') { processedResults = processedResults.filter(item => item.condition === 'New'); } else if (conditionFilter === 'refurbished') { processedResults = processedResults.filter(item => item.condition === 'Refurbished'); } if (selectedStores.size > 0 && selectedStores.size < availableStores.length) { processedResults = processedResults.filter(item => selectedStores.has(item.store)); } if (sortBy === 'price-asc') { processedResults.sort((a, b) => a.price - b.price); } else if (sortBy === 'price-desc') { processedResults.sort((a, b) => b.price - a.price); } renderResults(processedResults); }
 function populateAndShowControls() { sortSelect.value = 'price-asc'; conditionFilterSelect.value = 'all'; availableStores = [...new Set(fullResults.map(item => item.store))].sort(); storeFilterList.innerHTML = ''; selectedStores.clear(); availableStores.forEach(store => { const li = document.createElement('li'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.id = `store-${store}`; checkbox.dataset.store = store; checkbox.checked = true; const label = document.createElement('label'); label.htmlFor = `store-${store}`; label.textContent = store; li.appendChild(checkbox); li.appendChild(label); storeFilterList.appendChild(li); selectedStores.add(store); }); updateStoreFilterButtonText(); controlsContainer.style.display = 'flex'; }
 function updateStoreFilterButtonText() { if (selectedStores.size === availableStores.length) { storeFilterButton.textContent = 'All Stores'; } else if (selectedStores.size === 0) { storeFilterButton.textContent = 'No Stores Selected'; } else if (selectedStores.size === 1) { storeFilterButton.textContent = `${selectedStores.values().next().value}`; } else { storeFilterButton.textContent = `${selectedStores.size} Stores Selected`; } }
 function updateAllCheckboxes(checked) { document.querySelectorAll('#store-filter-list input[type="checkbox"]').forEach(cb => { cb.checked = checked; if (checked) { selectedStores.add(cb.dataset.store); } else { selectedStores.clear(); } }); updateStoreFilterButtonText(); applyFiltersAndSort(); }
 function renderResults(results) { resultsContainer.innerHTML = `<h2>Best Prices for ${searchInput.value.trim()}</h2>`; if (results.length === 0) { resultsContainer.innerHTML += `<p>No results match the current filters.</p>`; return; } results.forEach(offer => { const card = document.createElement('div'); card.className = 'result-card'; const isLinkValid = offer.url && offer.url !== '#'; const linkAttributes = isLinkValid ? `href="${offer.url}" target="_blank" rel="noopener noreferrer"` : `href="#" class="disabled-link"`; const conditionBadge = offer.condition === 'Refurbished' ? `<span class="condition-badge">Refurbished</span>` : ''; card.innerHTML = ` <div class="result-image"> <img src="${offer.image}" alt="${offer.title}" onerror="this.style.display='none';"> </div> <div class="result-info"> <h3>${offer.title}</h3> <p>Sold by: <strong>${offer.store}</strong> ${conditionBadge}</p> </div> <div class="result-price"> <a ${linkAttributes}> ${offer.price_string} </a> </div> `; resultsContainer.appendChild(card); }); }
-
 // --- "Fun" and Real-time Features ---
 function makeItRain() { const rainContainer = document.body; for (let i = 0; i < 40; i++) { const money = document.createElement('span'); money.textContent = '💰'; money.style.position = 'fixed'; money.style.top = `${Math.random() * -20}vh`; money.style.left = `${Math.random() * 100}vw`; money.style.fontSize = `${Math.random() * 2 + 1}rem`; money.style.zIndex = '9999'; money.style.transition = 'top 2s ease-in, transform 2s ease-in-out'; money.style.pointerEvents = 'none'; rainContainer.appendChild(money); setTimeout(() => { money.style.top = '110vh'; money.style.transform = `rotate(${Math.random() * 720}deg)`; }, 10); setTimeout(() => { money.remove(); }, 2100); } }
 function showFlashMessage(message, duration = 10000) { themeNotificationEl.innerHTML = `<b>${message}</b>`; themeNotificationEl.classList.remove('hidden'); if (notificationTimeout) clearTimeout(notificationTimeout); notificationTimeout = setTimeout(() => { themeNotificationEl.classList.add('hidden'); }, duration); }
 async function pollForLiveState() { try { const response = await fetch(`/live_state.json?t=${Date.now()}`); if (!response.ok) return; const data = await response.json(); if (data.permanentMessage) { permanentMessageBanner.textContent = data.permanentMessage; permanentMessageBanner.classList.remove('hidden'); } else { permanentMessageBanner.classList.add('hidden'); } if (data.flashMessage && data.flashMessage.timestamp > lastSeenFlashTimestamp) { showFlashMessage(data.flashMessage.text); lastSeenFlashTimestamp = data.flashMessage.timestamp; } if (data.theme && data.theme !== currentLocalTheme) { applyTheme(data.theme, true); } if (data.rainEventTimestamp && data.rainEventTimestamp > lastSeenRainEvent) { makeItRain(); lastSeenRainEvent = data.rainEventTimestamp; } } catch (error) { console.error("Live state poll failed:", error); } }
-function applyTheme(themeName, showNotification = false) { document.body.className = ''; document.body.classList.add(`theme-${themeName}`); currentLocalTheme = themeName; if (showNotification) { showFlashMessage(`Theme changed to: ${themeName.charAt(0).toUpperCase() + themeName.slice(1)}`, 2000); } }
+function applyTheme(themeName, showNotification = false) { document.body.classList.remove('theme-default', 'theme-dark', 'theme-retro', 'theme-sepia', 'theme-solarized', 'theme-synthwave'); document.body.classList.add(`theme-${themeName}`); currentLocalTheme = themeName; if (showNotification) { showFlashMessage(`Theme changed to: ${themeName.charAt(0).toUpperCase() + themeName.slice(1)}`, 2000); } }
 async function initializeState() { try { const response = await fetch(`/live_state.json?t=${Date.now()}`); if (!response.ok) return; const data = await response.json(); if (data.permanentMessage) { permanentMessageBanner.textContent = data.permanentMessage; permanentMessageBanner.classList.remove('hidden'); } if (data.flashMessage) lastSeenFlashTimestamp = data.flashMessage.timestamp; if (data.theme) applyTheme(data.theme, false); if (data.rainEventTimestamp) lastSeenRainEvent = data.rainEventTimestamp; } catch (error) { console.error("Failed to initialize live state:", error); } finally { setInterval(pollForLiveState, 5000); } }
-
 initializeState();
 
-// --- API Key Request Logic ---
-async function requestApiKey() {
-    generateKeyButton.disabled = true;
-    generateKeyButton.textContent = 'Generating...';
+// --- API Key Modal Functions ---
+async function showApiKeyModal() {
+    apiKeyModal.style.display = 'flex';
+    apiKeyDisplayArea.textContent = 'Loading...';
+    apiStatsContainer.innerHTML = '<div class="stat-card"><div class="stat-card-value">...</div></div>';
+    Promise.all([fetch('/api/get-public-key').then(res => res.json()), fetch('/api/get-my-stats').then(res => res.json())])
+        .then(([keyData, statsData]) => {
+            apiKeyDisplayArea.textContent = keyData.apiKey;
+            displayApiStats(statsData);
+        }).catch(error => {
+            console.error("Error fetching API data:", error);
+            apiKeyDisplayArea.textContent = "Error loading key.";
+            apiStatsContainer.innerHTML = `<p class="error">Could not load usage stats.</p>`;
+        });
+}
+function displayApiStats(stats) {
+    apiStatsContainer.innerHTML = `
+        <div class="stat-card">
+            <div class="stat-card-value">${stats.requestsThisWindow} / ${stats.maxRequests}</div>
+            <div class="stat-card-label">Requests This Minute</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-value">${stats.windowResetsIn}s</div>
+            <div class="stat-card-label">Limit Resets In</div>
+        </div>
+    `;
+}
+async function fetchAndDisplayStats() {
+    apiStatsContainer.innerHTML = '<div class="stat-card"><div class="stat-card-value">...</div></div>';
     try {
-        const response = await fetch('/api/v1/request-key', { method: 'POST' });
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(data.message || 'Failed to generate key.');
-        }
-        apiKeyCode.textContent = data.apiKey;
-        apiKeyDisplay.classList.remove('hidden');
-        generateKeyButton.style.display = 'none'; // Hide button after key is shown
+        const response = await fetch('/api/get-my-stats');
+        if (!response.ok) throw new Error('Could not fetch stats.');
+        const statsData = await response.json();
+        displayApiStats(statsData);
     } catch (error) {
-        console.error("API Key Request Error:", error);
-        alert(`An error occurred: ${error.message}`);
-        generateKeyButton.disabled = false;
-        generateKeyButton.textContent = 'Generate Key';
+        console.error("Error fetching stats:", error);
+        apiStatsContainer.innerHTML = `<p class="error">Could not load usage stats.</p>`;
+    }
+}
+function copyApiKey() {
+    const key = apiKeyDisplayArea.textContent;
+    if (key && key !== 'Loading...' && key !== 'Error loading key.') {
+        const textArea = document.createElement("textarea");
+        textArea.value = key;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            copyApiKeyButton.textContent = 'Copied!';
+            setTimeout(() => { copyApiKeyButton.textContent = 'Copy Key'; }, 2000);
+        } catch (err) { console.error('Failed to copy API key', err); }
+        document.body.removeChild(textArea);
     }
 }
 
-// --- ADMIN PANEL LOGIC ---
+// --- ADMIN PANEL EVENT LISTENERS & FUNCTIONS ---
 adminPermanentMessageForm.addEventListener('submit', (e) => { e.preventDefault(); setPermanentMessage(adminPermanentMessageInput.value); });
 adminClearPermanentMessageButton.addEventListener('click', clearPermanentMessage);
 adminFlashMessageForm.addEventListener('submit', (e) => { e.preventDefault(); sendFlashMessage(adminFlashMessageInput.value); });
@@ -237,8 +255,7 @@ clearImageCacheButton.addEventListener('click', () => performAdminAction('/admin
 clearStatsButton.addEventListener('click', () => performAdminAction('/admin/clear-stats', 'clear stats', 'Are you sure you want to clear ALL traffic stats and search history?'));
 document.getElementById('theme-controls').addEventListener('click', (event) => { if (event.target.classList.contains('theme-button')) { const theme = event.target.dataset.theme; setTheme(theme); } });
 makeItRainButton.addEventListener('click', () => performAdminAction('/admin/trigger-rain', 'trigger rain'));
-
-async function fetchAdminData(code) { currentAdminCode = code; try { const response = await fetch('/admin/traffic-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }), }); if (!response.ok) { alert('Incorrect code.'); return; } const data = await response.json(); workerStatusEl.textContent = data.workerStatus; workerStatusEl.className = data.workerStatus === 'Connected' ? 'enabled' : 'disabled'; updateQueueStatus(data.isQueuePaused); jobQueueCountEl.textContent = data.jobQueue.length; jobQueueListEl.innerHTML = data.jobQueue.length > 0 ? data.jobQueue.map(job => `<li>"${job.query}"</li>`).join('') : '<li>Queue is empty.</li>'; activeJobsCountEl.textContent = data.activeJobs.length; activeJobsListEl.innerHTML = data.activeJobs.length > 0 ? data.activeJobs.map(job => `<li>"${job}"</li>`).join('') : '<li>No active jobs.</li>'; imageCacheSizeEl.textContent = data.imageCacheSize; updateMaintenanceStatus(data.isServiceDisabled); totalSearchesEl.textContent = data.totalSearches; uniqueVisitorsEl.textContent = data.uniqueVisitors; usersOnlineEl.textContent = data.onlineUsers; searchHistoryListEl.innerHTML = data.searchHistory.length > 0 ? data.searchHistory.map(item => `<li>"${item.query}" at ${new Date(item.timestamp).toLocaleString()}</li>`).join('') : '<li>No searches recorded yet.</li>'; currentThemeDisplay.textContent = data.currentTheme.charAt(0).toUpperCase() + data.currentTheme.slice(1); topSearchesListEl.innerHTML = data.topSearches && data.topSearches.length > 0 ? data.topSearches.map(item => `<li>"${item.term}" (${item.count} times)</li>`).join('') : '<li>No searches yet.</li>'; adminPanel.style.display = 'flex'; } catch (error) { console.error("Error fetching admin data:", error); alert("An error occurred while fetching stats."); } }
+async function fetchAdminData(code) { currentAdminCode = code; try { const response = await fetch('/admin/traffic-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }), }); if (!response.ok) { alert('Incorrect code.'); return; } const data = await response.json(); workerStatusEl.textContent = data.workerStatus; workerStatusEl.className = data.workerStatus === 'Connected' ? 'enabled' : 'disabled'; updateQueueStatus(data.isQueuePaused); jobQueueCountEl.textContent = data.jobQueue.length; jobQueueListEl.innerHTML = data.jobQueue.length > 0 ? data.jobQueue.map(job => `<li>"${job}"</li>`).join('') : '<li>Queue is empty.</li>'; activeJobsCountEl.textContent = data.activeJobs.length; activeJobsListEl.innerHTML = data.activeJobs.length > 0 ? data.activeJobs.map(job => `<li>"${job}"</li>`).join('') : '<li>No active jobs.</li>'; imageCacheSizeEl.textContent = data.imageCacheSize; updateMaintenanceStatus(data.isServiceDisabled); totalSearchesEl.textContent = data.totalSearches; uniqueVisitorsEl.textContent = data.uniqueVisitors; usersOnlineEl.textContent = data.onlineUsers; searchHistoryListEl.innerHTML = data.searchHistory.length > 0 ? data.searchHistory.map(item => `<li>"${item.query}" at ${new Date(item.timestamp).toLocaleString()}</li>`).join('') : '<li>No searches recorded yet.</li>'; currentThemeDisplay.textContent = data.currentTheme.charAt(0).toUpperCase() + data.currentTheme.slice(1); topSearchesListEl.innerHTML = data.topSearches && data.topSearches.length > 0 ? data.topSearches.map(item => `<li>"${item.term}" (${item.count} times)</li>`).join('') : '<li>No searches yet.</li>'; adminPanel.style.display = 'flex'; } catch (error) { console.error("Error fetching admin data:", error); alert("An error occurred while fetching stats."); } }
 async function performAdminAction(url, actionName, confirmation = null, body = {}) { if (!currentAdminCode) { alert("Please open the admin panel with a valid code first."); return; } if (confirmation && !confirm(confirmation)) return; try { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: currentAdminCode, ...body }), }); const data = await response.json(); if (!response.ok) throw new Error(data.message || `Failed to ${actionName}.`); if (data.message) alert(data.message); if (url.includes('set-theme') || url.includes('trigger-rain') || url.includes('message')) { pollForLiveState(); } fetchAdminData(currentAdminCode); } catch (error) { console.error(`Error during ${actionName}:`, error); alert(`An error occurred: ${error.message}`); } }
 async function setTheme(themeName) { await performAdminAction('/admin/set-theme', 'set theme', null, { theme: themeName }); }
 async function clearCache(isFullClear) { const queryToClear = singleCacheInput.value.trim(); if (!isFullClear && !queryToClear) { alert("Please enter a query to clear."); return; } const confirmation = isFullClear ? "Are you sure you want to clear the entire search cache?" : `Are you sure you want to clear the cache for "${queryToClear}"?`; if (confirm(confirmation)) { performAdminAction('/admin/clear-cache', 'clear cache', null, { query: isFullClear ? null : queryToClear }); if (!isFullClear) singleCacheInput.value = ''; } }
