@@ -1,4 +1,4 @@
-// server.js (FINAL, with corrected scoring logic for generic products)
+// server.js (FINAL, with updated accessory knowledge)
 
 const express = require('express');
 const cors = require('cors');
@@ -55,15 +55,17 @@ const CORE_ENTITIES = {
     'nintendo switch': { positive: ['console', 'oled model', 'lite'], negative: ['game', 'controller', 'case', 'grip', 'dock', 'ac adaptor', 'memory card', 'travel bag', 'joy-con', 'charging grip', 'sports', 'kart', 'zelda', 'mario', 'pokemon', 'animal crossing'] },
     'playstation': { positive: ['console', 'ps5', 'ps4', 'slim', 'pro', '1tb', '825gb'], negative: ['controller', 'headset', 'dual sense', 'game', 'vr', 'camera', 'for playstation', 'pulse 3d'] }
 };
-const GENERIC_ACCESSORY_BRANDS = ['uag', 'otterbox', 'spigen', 'zagg', 'mophie', 'lifeproof', 'incipio', 'tech21', 'cygnett', 'efm', '3sixt', 'belkin', 'smallrig', 'stm', 'dbramante1928', 'razer', 'hyperx', 'logitech', 'steelseries', 'turtle beach', 'astro', 'powera', '8bitdo', 'gamesir'];
-const GENERIC_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control'];
+const GENERIC_ACCESSORY_BRANDS = ['uag', 'otterbox', 'spigen', 'zagg', 'mophie', 'lifeproof', 'incipio', 'tech21', 'cygnett', 'efm', '3sixt', 'belkin', 'smallrig', 'stm', 'dbramante1928', 'razer', 'hyperx', 'logitech', 'steelseries', 'turtle beach', 'astro', 'powera', '8bitdo', 'gamesir', 'moment', 'panzer'];
+const GENERIC_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control', 'filter', 'bundle', 'cinebloom'];
+const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe', 'remote', 'remote control', 'controller', 'headset', 'filter'];
 const MAIN_PRODUCT_KEYWORDS = ['gb', 'tb', 'unlocked', 'console', 'cellular', 'processor', 'inverter', 'brushless', 'engine', 'hz', 'g-sync', 'freesync', 'watts', 'litres', 'multiplus', 'smart lock'];
-const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe', 'remote', 'remote control', 'controller', 'headset'];
+
 
 // --- APP & MIDDLEWARE SETUP ---
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 app.use(express.static('public'));
+
 
 // --- Rate Limiting Middleware ---
 const rateLimitTracker = new Map();
@@ -97,6 +99,7 @@ async function loadImageCacheFromFile() { try { await fs.access(IMAGE_CACHE_PATH
 async function saveImageCacheToFile() { try { const plainObject = Object.fromEntries(imageCache); const jsonString = JSON.stringify(plainObject, null, 2); await fs.writeFile(IMAGE_CACHE_PATH, jsonString, 'utf8'); } catch (error) { console.error('Error saving image cache to file:', error); } }
 
 let lastOzbargainCallTimestamp = 0;
+const OZbARGAIN_COOLDOWN_MS = 60 * 1000;
 async function fetchOzbargainBackup(query) {
     const now = Date.now();
     if (now - lastOzbargainCallTimestamp < OZbARGAIN_COOLDOWN_MS) {
@@ -151,33 +154,23 @@ function filterByQueryStrictness(results, query) {
     const regexes = queryWords.map(word => new RegExp(`\\b${word}\\b`, 'i'));
     return results.filter(item => regexes.every(regex => regex.test(item.title)));
 }
-
-// --- REVISED SCORING LOGIC ---
 function calculateScore(title, query) {
     const lowerTitle = title.toLowerCase();
     const lowerQuery = query.toLowerCase();
     let score = 0;
-
-    // Add points for positive keywords first
     for (const keyword of MAIN_PRODUCT_KEYWORDS) {
         if (lowerTitle.includes(keyword)) {
             score += 20;
         }
     }
-    
-    // Subtract points for strong negative signals (accessory brands)
     if (GENERIC_ACCESSORY_BRANDS.some(brand => lowerTitle.includes(brand))) {
         score -= 100;
     }
-    
-    // Subtract points for accessory keywords, but only if they weren't part of the user's specific search
     for (const keyword of GENERIC_ACCESSORY_KEYWORDS) {
         if (lowerTitle.includes(keyword) && !lowerQuery.includes(keyword)) {
             score -= 100;
         }
     }
-
-    // Special handling for major platforms
     const matchedEntity = Object.keys(CORE_ENTITIES).find(key => lowerQuery.includes(key));
     if (matchedEntity) {
         const entityRules = CORE_ENTITIES[matchedEntity];
@@ -185,12 +178,9 @@ function calculateScore(title, query) {
         if (entityRules.negative.some(term => lowerTitle.includes(term))) score -= 50;
         if (lowerTitle.split(' ').length < 7) score += 20;
     }
-    
-    // Specific penalty for ambiguous terms like "charger" if it's not the core search term
     if (lowerTitle.includes('charger') && !lowerQuery.includes('charger')) {
         score -= 50;
     }
-    
     return score;
 }
 
