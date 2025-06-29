@@ -1,4 +1,4 @@
-// server.js (FINAL, with Single-Request API Logic)
+// server.js (FINAL, with corrected scoring logic for generic products)
 
 const express = require('express');
 const cors = require('cors');
@@ -56,14 +56,14 @@ const CORE_ENTITIES = {
     'playstation': { positive: ['console', 'ps5', 'ps4', 'slim', 'pro', '1tb', '825gb'], negative: ['controller', 'headset', 'dual sense', 'game', 'vr', 'camera', 'for playstation', 'pulse 3d'] }
 };
 const GENERIC_ACCESSORY_BRANDS = ['uag', 'otterbox', 'spigen', 'zagg', 'mophie', 'lifeproof', 'incipio', 'tech21', 'cygnett', 'efm', '3sixt', 'belkin', 'smallrig', 'stm', 'dbramante1928', 'razer', 'hyperx', 'logitech', 'steelseries', 'turtle beach', 'astro', 'powera', '8bitdo', 'gamesir'];
-const GENERIC_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control'];
+const GENERIC_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'prismshield', 'kevlar', 'folio', 'holster', 'pouch', 'sleeve', 'wallet', 'battery pack', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'silicone', 'leather', 'magsafe', 'rugged', 'remote', 'remote control'];
+const MAIN_PRODUCT_KEYWORDS = ['gb', 'tb', 'unlocked', 'console', 'cellular', 'processor', 'inverter', 'brushless', 'engine', 'hz', 'g-sync', 'freesync', 'watts', 'litres', 'multiplus', 'smart lock'];
 const INTENT_ACCESSORY_KEYWORDS = ['case', 'cover', 'protector', 'charger', 'cable', 'adapter', 'stand', 'mount', 'holder', 'strap', 'band', 'replacement', 'skin', 'film', 'glass', 's-pen', 'spen', 'stylus', 'battery', 'kit', 'cage', 'lens', 'tripod', 'gimbal', 'magsafe', 'remote', 'remote control', 'controller', 'headset'];
 
 // --- APP & MIDDLEWARE SETUP ---
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 app.use(express.static('public'));
-
 
 // --- Rate Limiting Middleware ---
 const rateLimitTracker = new Map();
@@ -152,20 +152,45 @@ function filterByQueryStrictness(results, query) {
     const regexes = queryWords.map(word => new RegExp(`\\b${word}\\b`, 'i'));
     return results.filter(item => regexes.every(regex => regex.test(item.title)));
 }
+
 function calculateScore(title, query) {
     const lowerTitle = title.toLowerCase();
     const lowerQuery = query.toLowerCase();
     let score = 0;
+
+    // Add points for positive keywords first
+    for (const keyword of MAIN_PRODUCT_KEYWORDS) {
+        if (lowerTitle.includes(keyword)) {
+            score += 20;
+        }
+    }
+    
+    // Subtract points for strong negative signals
+    if (GENERIC_ACCESSORY_BRANDS.some(brand => lowerTitle.includes(brand))) {
+        score -= 100;
+    }
+    
+    // Subtract points for accessory keywords, but only if they weren't part of the user's search
+    for (const keyword of GENERIC_ACCESSORY_KEYWORDS) {
+        if (lowerTitle.includes(keyword) && !lowerQuery.includes(keyword)) {
+            score -= 100;
+        }
+    }
+
+    // Apply special rules for major platforms
     const matchedEntity = Object.keys(CORE_ENTITIES).find(key => lowerQuery.includes(key));
     if (matchedEntity) {
         const entityRules = CORE_ENTITIES[matchedEntity];
         if (entityRules.positive.some(term => lowerTitle.includes(term))) score += 100;
         if (entityRules.negative.some(term => lowerTitle.includes(term))) score -= 50;
         if (lowerTitle.split(' ').length < 7) score += 20;
-    } else {
-        if (GENERIC_ACCESSORY_BRANDS.some(brand => lowerTitle.includes(brand))) score -= 100;
-        if (GENERIC_ACCESSORY_KEYWORDS.some(keyword => lowerTitle.includes(keyword))) score -= 100;
     }
+    
+    // Specific penalty for ambiguous terms like "charger" if it's not the core search term
+    if (lowerTitle.includes('charger') && !lowerQuery.includes('charger')) {
+        score -= 50;
+    }
+    
     return score;
 }
 
@@ -256,7 +281,7 @@ app.post('/submit-results', async (req, res) => {
     if (processedResults.length > 0) {
         const finalResults = await enrichResultsWithImages(processedResults, query).then(res => res.map(item => ({ ...item, condition: detectItemCondition(item.title) })));
         finalPayload.results = finalResults;
-        searchCache.set(query.toLowerCase(), finalPayload);
+        searchCache.set(query.toLowerCase(), { ...finalPayload, timestamp: Date.now() });
         console.log(`[Success] Processed and cached ${finalResults.length} deals for "${query}".`);
     } else {
         const simplifiedQuery = simplifyQuery(query);
