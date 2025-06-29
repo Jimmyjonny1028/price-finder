@@ -1,4 +1,4 @@
-// server.js (FINAL, with all features and fixes)
+// server.js (FINAL, with Fixed Public API Key)
 
 const express = require('express');
 const cors = require('cors');
@@ -9,16 +9,15 @@ const url = require('url');
 const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
-const { randomUUID } = require('crypto');
 
 const app = express();
 const PORT = 5000;
 const server = http.createServer(app);
 
 let limit;
-app.set('trust proxy', true); // Required for getting correct IP on Render
+app.set('trust proxy', true);
 
-// --- Caches and State ---
+// Caches and State
 const searchCache = new Map();
 let imageCache = new Map();
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
@@ -50,7 +49,8 @@ const ADMIN_CODE = process.env.ADMIN_CODE;
 const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID;
-const PUBLIC_API_KEY = process.env.PUBLIC_API_KEY || randomUUID();
+// --- THE CHANGE IS HERE: Using your fixed public API key ---
+const PUBLIC_API_KEY = process.env.PUBLIC_API_KEY || '608b75a6-ce94-46ba-830a-098a21b87816';
 
 const CORE_ENTITIES = {
     'xbox': { positive: ['console', 'series x', 'series s', '1tb', '2tb', '512gb'], negative: ['controller', 'headset', 'game drive', 'for xbox', 'wired', 'wireless headset', 'play and charge', 'chat link', 'game', 'steering wheel', 'racing wheel', 'flightstick', 'sofa', 'expansion card', 'arcade stick'] },
@@ -93,6 +93,7 @@ async function loadImageCacheFromFile() { try { await fs.access(IMAGE_CACHE_PATH
 async function saveImageCacheToFile() { try { const plainObject = Object.fromEntries(imageCache); const jsonString = JSON.stringify(plainObject, null, 2); await fs.writeFile(IMAGE_CACHE_PATH, jsonString, 'utf8'); } catch (error) { console.error('Error saving image cache to file:', error); } }
 
 let lastOzbargainCallTimestamp = 0;
+const OZbARGAIN_COOLDOWN_MS = 60 * 1000;
 async function fetchOzbargainBackup(query) {
     const now = Date.now();
     if (now - lastOzbargainCallTimestamp < OZbARGAIN_COOLDOWN_MS) {
@@ -209,22 +210,18 @@ app.get('/api/search', apiRateLimiter, async (req, res) => {
 });
 app.get('/search', async (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode. Please try again later.' }); } const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } const normalizedQuery = query.toLowerCase().trim(); if (normalizedQuery) { const currentCount = searchTermFrequency.get(normalizedQuery) || 0; searchTermFrequency.set(normalizedQuery, currentCount + 1); } } catch (e) { console.error("Error logging traffic:", e); } const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { return res.json(cachedData); } } if (workerSocket) { const isQueued = jobQueue.includes(query); const isActive = workerActiveJobs.has(query); if (!isQueued && !isActive) { jobQueue.push(query); workerSocket.send(JSON.stringify({ type: 'NOTIFY_NEW_JOB' })); } return res.status(202).json({ message: "Search has been queued." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable." }); }});
 app.get('/results/:query', (req, res) => { if (isMaintenanceModeEnabled) { return res.status(503).json({ error: 'Service is currently in maintenance mode.' }); } const { query } = req.params; const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { return res.status(200).json(searchCache.get(cacheKey)); } else { return res.status(202).send(); }});
-
 app.post('/submit-results', async (req, res) => {
     const { secret, query, results } = req.body;
     if (secret !== SERVER_SIDE_SECRET) return res.status(403).send('Forbidden');
     if (!query || !results) return res.status(400).send('Bad Request: Missing query or results.');
     res.status(200).send('Results received. Processing now.');
-
     let pipeline = parsePythonResults(results);
     console.log(`[Start] Received ${pipeline.length} results from scraper for "${query}".`);
-
     if (pipeline.length === 0) {
         pipeline = await fetchOzbargainBackup(query);
         if (pipeline.length > 0) console.log(`[Backup] Found ${pipeline.length} potential deals on OzBargain.`);
         else console.log(`[Backup] OzBargain backup found no results or is on cooldown.`);
     }
-
     const intent = getQueryIntent(query);
     console.log(`[Intent Analysis] Detected intent: ${intent}`);
     pipeline = filterByQueryStrictness(pipeline, query);
@@ -239,7 +236,6 @@ app.post('/submit-results', async (req, res) => {
         return a.price - b.price;
     });
     console.log(`[Sort] Final results have been intelligently sorted by relevance and price.`);
-
     if (processedResults.length > 0) {
         const finalResults = await enrichResultsWithImages(processedResults, query).then(res => res.map(item => ({ ...item, condition: detectItemCondition(item.title) })));
         searchCache.set(query.toLowerCase(), { results: finalResults, timestamp: Date.now() });
@@ -255,8 +251,6 @@ app.post('/submit-results', async (req, res) => {
         }
     }
 });
-
-// Admin Endpoints
 app.post('/api/ping', (req, res) => { const { sessionID } = req.body; if (!sessionID) return res.status(400).send(); if (onlineUserTimeouts.has(sessionID)) { clearTimeout(onlineUserTimeouts.get(sessionID)); } const timeoutID = setTimeout(() => { onlineUserTimeouts.delete(sessionID); updateLiveStateFile(); }, USER_ONLINE_TIMEOUT_MS); onlineUserTimeouts.set(sessionID, timeoutID); updateLiveStateFile(); res.status(200).json({ status: 'ok' }); });
 app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) return res.status(403).json({ error: 'Forbidden' }); const topSearches = [...searchTermFrequency.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([term, count]) => ({ term, count })); res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory, isServiceDisabled: isMaintenanceModeEnabled, workerStatus: workerSocket ? 'Connected' : 'Disconnected', activeJobs: Array.from(workerActiveJobs), jobQueue: jobQueue, isQueuePaused: isQueueProcessingPaused, imageCacheSize: imageCache.size, currentTheme: liveState.theme, onlineUsers: liveState.onlineUsers, topSearches: topSearches }); });
 app.post('/admin/toggle-maintenance', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } isMaintenanceModeEnabled = !isMaintenanceModeEnabled; const message = `Service has been ${isMaintenanceModeEnabled ? 'DISABLED' : 'ENABLED'}.`; console.log(`MAINTENANCE MODE: ${message}`); res.json({ isServiceDisabled: isMaintenanceModeEnabled, message: message }); });
